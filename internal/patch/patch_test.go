@@ -177,3 +177,97 @@ func TestRestoreSinBackupsNoMiente(t *testing.T) {
 		t.Errorf("reporto trabajo que no hizo: %+v", res)
 	}
 }
+
+// --- todo o nada: ninguna de estas validaciones puede ocurrir despues de la
+// primera escritura, o el parche aterriza a medias.
+
+func archivoEs(t *testing.T, ws, rel, quiero string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(ws, rel))
+	if err != nil {
+		t.Fatalf("leyendo %s: %v", rel, err)
+	}
+	if string(data) != quiero {
+		t.Errorf("%s = %q, quiero %q", rel, string(data), quiero)
+	}
+}
+
+func TestUnBusquedaNoEncontradaNoDejaAplicadoLoAnterior(t *testing.T) {
+	ws := t.TempDir()
+	for rel, body := range map[string]string{"a.go": "AAA\n", "b.go": "BBB\n"} {
+		if err := os.WriteFile(filepath.Join(ws, rel), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prop := "<<<<\na.go\n====\nAAA\n====\nPARCHEADO\n>>>>\n" +
+		"<<<<\nb.go\n====\nESTO NO ESTA\n====\nX\n>>>>\n"
+
+	if err := Apply(ws, prop, nil); err == nil {
+		t.Fatal("no fallo con un search inexistente")
+	}
+	archivoEs(t, ws, "a.go", "AAA\n") // el primero NO se aplico
+	archivoEs(t, ws, "b.go", "BBB\n")
+}
+
+func TestUnaBusquedaAmbiguaNoDejaAplicadoLoAnterior(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), []byte("AAA\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "dup.go"), []byte("x\nx\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prop := "<<<<\na.go\n====\nAAA\n====\nPARCHEADO\n>>>>\n" +
+		"<<<<\ndup.go\n====\nx\n====\ny\n>>>>\n"
+
+	if err := Apply(ws, prop, nil); err == nil {
+		t.Fatal("no fallo con un search ambiguo")
+	}
+	archivoEs(t, ws, "a.go", "AAA\n")
+	archivoEs(t, ws, "dup.go", "x\nx\n")
+}
+
+func TestUnaCreacionInvalidaNoDejaAplicadoLoAnterior(t *testing.T) {
+	// Crear exige SEARCH vacio. Si no lo esta, tampoco puede haberse aplicado
+	// el bloque anterior.
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), []byte("AAA\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prop := "<<<<\na.go\n====\nAAA\n====\nPARCHEADO\n>>>>\n" +
+		"<<<<\nnuevo.go\n====\nalgo que no puede existir\n====\ncontenido\n>>>>\n"
+
+	if err := Apply(ws, prop, nil); err == nil {
+		t.Fatal("no fallo al crear con SEARCH no vacio")
+	}
+	archivoEs(t, ws, "a.go", "AAA\n")
+	if _, err := os.Stat(filepath.Join(ws, "nuevo.go")); !os.IsNotExist(err) {
+		t.Error("creo el archivo pese al rechazo")
+	}
+}
+
+func TestCrearUnArchivoNuevoFunciona(t *testing.T) {
+	ws := t.TempDir()
+	prop := "<<<<\ninternal/sub/nuevo.go\n====\n\n====\npackage sub\n>>>>\n"
+
+	if err := Apply(ws, prop, NewSeen()); err != nil {
+		t.Fatalf("no pudo crear un archivo nuevo: %v", err)
+	}
+	archivoEs(t, ws, "internal/sub/nuevo.go", "package sub")
+}
+
+func TestDosBloquesSobreElMismoArchivoSeEncadenan(t *testing.T) {
+	// El segundo se aplica sobre el resultado del primero, que es lo que
+	// hacian cuando la escritura estaba intercalada.
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "x.go"), []byte("uno\ndos\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prop := "<<<<\nx.go\n====\nuno\n====\nUNO\n>>>>\n" +
+		"<<<<\nx.go\n====\ndos\n====\nDOS\n>>>>\n"
+
+	if err := Apply(ws, prop, NewSeen("x.go")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	archivoEs(t, ws, "x.go", "UNO\nDOS\n")
+}
