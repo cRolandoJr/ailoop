@@ -89,7 +89,10 @@ func ApplyBlocks(workspace string, blocks []Block, seen Seen) error {
 		// non-nil seen means the agent read nothing, and then no patch is
 		// legitimate.
 		if seen != nil && !seen.Has(rel) {
-			return unreadError(rel, seen)
+			// If the file doesn't exist on disk, they couldn't have read it. We allow creation.
+			if _, statErr := os.Stat(filepath.Join(workspace, rel)); statErr == nil {
+				return unreadError(rel, seen)
+			}
 		}
 	}
 
@@ -141,6 +144,15 @@ func applyBlock(workspace string, b Block) error {
 
 	contentBytes, err := os.ReadFile(full)
 	if err != nil {
+		if os.IsNotExist(err) {
+			if strings.TrimSpace(b.Search) != "" {
+				return fmt.Errorf("file does not exist, so SEARCH block must be empty")
+			}
+			if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+				return fmt.Errorf("failed to create directories: %w", err)
+			}
+			return os.WriteFile(full, []byte(b.Replace), 0644)
+		}
 		return fmt.Errorf("could not read file: %w", err)
 	}
 	content := string(contentBytes)

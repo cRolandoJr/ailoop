@@ -12,6 +12,7 @@ import (
 	"github.com/cRolandoJr/ailoop/internal/mcp"
 	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/cRolandoJr/ailoop/internal/tools"
+	"github.com/cRolandoJr/ailoop/internal/web"
 )
 
 // MaxToolRounds bounds how many times an agent may look at the workspace
@@ -30,14 +31,23 @@ type ToolObserver func(res tools.Result)
 // real project instead of describing one it imagined. reg decides what it is
 // allowed to inspect.
 func RunPhase(ctx context.Context, s *state.AIState, projectContext string, client llm.Client,
-	workspace string, declaredCmds map[string]string, pool *mcp.Pool, observe ToolObserver) (string, error) {
+	workspace string, declaredCmds map[string]string, pool *mcp.Pool, fetcher *web.Fetcher,
+	observe ToolObserver) (string, error) {
 
 	sysPrompt := getSystemPromptForPhase(s.CurrentPhase)
 	if sysPrompt == "" {
 		return "", fmt.Errorf("no agent defined for phase %s", s.CurrentPhase)
 	}
 
-	reg := RegistryFor(s.CurrentPhase, declaredCmds, client.Describe(), pool)
+	// The research agent is reachable only through this callback. The primary
+	// agent never holds the network itself.
+	var research func(context.Context, string) (string, error)
+	if fetcher != nil {
+		research = func(ctx context.Context, question string) (string, error) {
+			return Research(ctx, question, client, fetcher, observe)
+		}
+	}
+	reg := RegistryFor(s.CurrentPhase, declaredCmds, client.Describe(), pool, research)
 	sysPrompt += tools.Protocol(reg)
 
 	// Build the context for the LLM based on current state

@@ -68,7 +68,7 @@ func TestElAgenteLeeElArchivoRealAntesDeResponder(t *testing.T) {
 	}}
 
 	s := state.NewState("mirar el codigo")
-	out, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil)
+	out, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RunPhase: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestElRechazoDePermisoLlegaAlModelo(t *testing.T) {
 
 	var vistos []tools.Result
 	_, err := RunPhase(context.Background(), s, "", f, ws,
-		map[string]string{"test": "echo hola"}, nil,
+		map[string]string{"test": "echo hola"}, nil, nil,
 		func(r tools.Result) { vistos = append(vistos, r) })
 	if err != nil {
 		t.Fatalf("RunPhase: %v", err)
@@ -138,7 +138,7 @@ func TestElVerificadorSiPuedeCorrerLosChecksDeclarados(t *testing.T) {
 	s.CurrentPhase = state.PhaseVerification
 
 	_, err := RunPhase(context.Background(), s, "", f, ws,
-		map[string]string{"test": "echo TESTS-OK"}, nil, nil)
+		map[string]string{"test": "echo TESTS-OK"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RunPhase: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestElLoopDeHerramientasTieneTecho(t *testing.T) {
 	f := &fakeLLM{replies: replies}
 
 	s := state.NewState("tarea")
-	if _, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil, nil); err != nil {
 		t.Fatalf("RunPhase: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestLasDecisionesAprobadasEntranAlContexto(t *testing.T) {
 	s := state.NewState("tarea")
 	s.Record.Add("el test es sintetico", "determinismo", []string{"E-03"}, state.PhaseDiscovery)
 
-	if _, err := RunPhase(context.Background(), s, "", f, t.TempDir(), nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", f, t.TempDir(), nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +204,7 @@ func TestSinVisionNoSeOfreceLeerImagenes(t *testing.T) {
 	ciego := &fakeLLM{replies: []string{"ok"}, caps: llm.Capabilities{Vision: llm.Unsupported}}
 	s := state.NewState("tarea")
 
-	if _, err := RunPhase(context.Background(), s, "", ciego, t.TempDir(), nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", ciego, t.TempDir(), nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var sys string
@@ -226,7 +226,7 @@ func TestCapacidadDesconocidaSeTrataComoAusente(t *testing.T) {
 	incierto := &fakeLLM{replies: []string{"ok"}, caps: llm.Capabilities{Vision: llm.Unknown}}
 	s := state.NewState("tarea")
 
-	if _, err := RunPhase(context.Background(), s, "", incierto, t.TempDir(), nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", incierto, t.TempDir(), nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var sys string
@@ -254,7 +254,7 @@ func TestConVisionSeOfreceYLaImagenLlegaAlModelo(t *testing.T) {
 	}
 	s := state.NewState("mirar una captura")
 
-	if _, err := RunPhase(context.Background(), s, "", vidente, ws, nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", vidente, ws, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestElLedgerRegistraCadaLlamadaDelToolLoop(t *testing.T) {
 	}}
 
 	s := state.NewState("tarea")
-	if _, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", f, ws, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +304,7 @@ func TestAlImplementadorSeLeAvisaQueLeaAntesDeParchear(t *testing.T) {
 	s := state.NewState("tarea")
 	s.CurrentPhase = state.PhaseImplementation
 
-	if _, err := RunPhase(context.Background(), s, "", f, t.TempDir(), nil, nil, nil); err != nil {
+	if _, err := RunPhase(context.Background(), s, "", f, t.TempDir(), nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var sys string

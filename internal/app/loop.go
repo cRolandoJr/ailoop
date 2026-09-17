@@ -17,6 +17,7 @@ import (
 	"github.com/cRolandoJr/ailoop/internal/llm"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
 	"github.com/cRolandoJr/ailoop/internal/state"
+	"github.com/cRolandoJr/ailoop/internal/web"
 )
 
 // ErrNoClient means the use case needs a model and none was provided.
@@ -62,4 +63,17 @@ func (l *Loop) declaredCommands() map[string]string {
 		cmds[chk.Name] = chk.Cmd
 	}
 	return cmds
+}
+
+// web returns the fetcher for the research agent, or nil when the project
+// turned research off.
+func (l *Loop) web() *web.Fetcher {
+	if l.cfg == nil || !l.cfg.Web.Enabled {
+		return nil
+	}
+	return &web.Fetcher{
+		Allowed:  l.cfg.Web.Allowed,
+		Blocked:  l.cfg.Web.Blocked,
+		MaxBytes: l.cfg.Web.MaxBytes,
+	}
 }

@@ -158,6 +158,45 @@ viejos invalida el prefijo cacheado, y eso costaría más de lo que ahorra en un
 conversación chica. Nunca elide una observación que contiene un error —
 esconderlo rompe el ciclo que lo está diagnosticando.
 
+## Investigación en internet
+
+Un agente que escribe código y además navega puede poner tu código en una URL. Por eso
+**no es el mismo agente**:
+
+| | Agente principal | Agente investigador |
+|---|---|---|
+| Workspace, código, decisiones | ✅ | ❌ |
+| `fs.read`, `fs.grep`, `fs.glob` | ✅ | ❌ |
+| **Red** | ❌ **en toda fase** | ✅ |
+| Recibe | la tarea completa | **sólo una pregunta, máximo 500 caracteres** |
+
+El principal delega con `research.ask`; nunca toca la red él mismo. El investigador no puede
+filtrar lo que nunca tuvo — es una propiedad estructural, no una apuesta sobre el
+comportamiento del modelo.
+
+**Busca donde sea.** No hay allowlist de destinos: restringirlos no defiende del canal real
+—lo que sale es la pregunta— y volvería inútil la investigación, porque no se sabe de
+antemano dónde está la respuesta.
+
+**Salvo la red local**, que se bloquea siempre y no es configurable: `localhost`, IPs
+privadas, link-local y `.internal`. El investigador no tiene nada del proyecto, pero corre
+dentro de tu perímetro; alcanzar tu router o el endpoint de metadata de un cloud no es
+exfiltración, es SSRF. Los redirects se vuelven a chequear, por la misma razón.
+
+Todo lo que trae llega envuelto en `UNTRUSTED_CONTENT` con la regla al lado del contenido:
+es dato de terceros, nunca instrucciones. La inyección de prompt es el caso esperado.
+
+```json
+"web": {"enabled": true}
+```
+
+`enabled` es explícito y `ailoop start` lo escribe en el config para que lo veas y puedas
+apagarlo. Opcionalmente `"allowed"` restringe destinos y `"blocked"` los excluye.
+
+**Lo que queda abierto:** la pregunta la formula el agente principal, que sí ve el código.
+Ese canal no se cierra sin volver inútil la función; se mantiene **angosto** (500
+caracteres), **visible** (se muestra como cualquier otra herramienta) y **registrado**.
+
 ## Seguridad de los parches
 
 - Las rutas se validan contra el workspace: se rechazan absolutas y las que

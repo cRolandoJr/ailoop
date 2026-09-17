@@ -205,7 +205,7 @@ func (e *GuardError) Unwrap() error { return e.Err }
 func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOptions) (string, error) {
 	run := func() (string, error) {
 		return agents.RunPhase(ctx, s, opts.ProjectContext, l.client,
-			l.workspace, l.declaredCommands(), l.pool, opts.OnTool)
+			l.workspace, l.declaredCommands(), l.pool, l.web(), opts.OnTool)
 	}
 
 	criticApplies := opts.UseCritic &&

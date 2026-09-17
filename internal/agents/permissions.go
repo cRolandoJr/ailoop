@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"context"
+
 	"github.com/cRolandoJr/ailoop/internal/llm"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
 	"github.com/cRolandoJr/ailoop/internal/state"
@@ -14,14 +16,14 @@ import (
 // it. This map is where that distinction lives.
 var phaseCapabilities = map[state.Phase][]tools.Capability{
 	// Reading the ground is what stops an agent from inventing it.
-	state.PhaseDiscovery:      {tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.FSReadImage},
-	state.PhaseDesign:         {tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.FSReadImage},
-	state.PhasePlan:           {tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep},
+	state.PhaseDiscovery:      {tools.ResearchAsk, tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.FSReadImage},
+	state.PhaseDesign:         {tools.ResearchAsk, tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.FSReadImage},
+	state.PhasePlan:           {tools.ResearchAsk, tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep},
 	state.PhaseImplementation: {tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.FSReadImage},
 	// Only the verifier may run the project's checks, and only the ones the
 	// project declared. An implementer that can run and fix its own tests is
 	// its own verifier, which AI_LOOP 18.2 forbids.
-	state.PhaseVerification: {tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.CmdRun},
+	state.PhaseVerification: {tools.ResearchAsk, tools.MCPDescribe, tools.MCPCall, tools.FSRead, tools.FSList, tools.FSGlob, tools.FSGrep, tools.CmdRun},
 }
 
 // RegistryFor builds the permission set for a phase, intersected with what
@@ -38,7 +40,8 @@ var phaseCapabilities = map[state.Phase][]tools.Capability{
 //
 // declaredCmds comes from the project's verification config: the agent cannot
 // run a command nobody declared, so there is no arbitrary shell in this path.
-func RegistryFor(phase state.Phase, declaredCmds map[string]string, caps llm.Capabilities, pool *mcp.Pool) *tools.Registry {
+func RegistryFor(phase state.Phase, declaredCmds map[string]string, caps llm.Capabilities,
+	pool *mcp.Pool, research func(context.Context, string) (string, error)) *tools.Registry {
 	allowed := map[tools.Capability]bool{}
 	for _, c := range phaseCapabilities[phase] {
 		if c == tools.FSReadImage && !caps.Vision.OK() {
@@ -55,9 +58,17 @@ func RegistryFor(phase state.Phase, declaredCmds map[string]string, caps llm.Cap
 		delete(allowed, tools.MCPCall)
 	}
 
+	// Research is delegation, not network access: the primary agent never gets
+	// web.fetch, in any phase. AI_LOOP 18.15.7.
+	if research == nil {
+		delete(allowed, tools.ResearchAsk)
+	}
+	delete(allowed, tools.WebFetch)
+
 	return &tools.Registry{
 		Allowed:      allowed,
 		RunnableCmds: declaredCmds,
 		MCP:          pool,
+		Research:     research,
 	}
 }

@@ -32,6 +32,24 @@ type Config struct {
 	// MCP are external tool servers to connect to. Their tools become
 	// capabilities of the loop without being reimplemented here.
 	MCP []mcp.Server `json:"mcp,omitempty"`
+	// Web is where the research agent may go. Empty means nowhere, which is
+	// the default: research is opt-in, per project.
+	Web WebPolicy `json:"web,omitempty"`
+}
+
+// WebPolicy is the egress policy of this project.
+type WebPolicy struct {
+	// Enabled turns research on. It is explicit rather than implied by the
+	// rest of the policy: an agent that can reach the internet is something
+	// the project decides, not something it inherits.
+	Enabled bool `json:"enabled"`
+	// Allowed optionally restricts destinations. Empty - the normal case -
+	// means anywhere public: you cannot know in advance where an answer is.
+	Allowed []string `json:"allowed,omitempty"`
+	// Blocked are destinations never reached.
+	Blocked []string `json:"blocked,omitempty"`
+	// MaxBytes caps one retrieved page. Zero uses the package default.
+	MaxBytes int `json:"max_bytes,omitempty"`
 }
 
 func Path(targetDir string) string {
@@ -72,7 +90,12 @@ func Save(targetDir string, c *Config) error {
 // It only knows the stacks we have a real project for today; anything else
 // gets an empty list the user fills in, never a guessed command.
 func Detect(targetDir string) *Config {
-	c := &Config{TimeoutSeconds: DefaultTimeoutSeconds}
+	c := &Config{
+		TimeoutSeconds: DefaultTimeoutSeconds,
+		// Research on by default, and written into the file so it is visible
+		// and can be turned off. A setting nobody can see is not a choice.
+		Web: WebPolicy{Enabled: true},
+	}
 
 	if exists(filepath.Join(targetDir, "go.mod")) {
 		c.Verify = []verify.Check{
