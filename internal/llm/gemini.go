@@ -83,7 +83,7 @@ func (c *GeminiClient) Generate(ctx context.Context, messages []Message) (Respon
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(body))
+		return Response{}, NewAPIError("gemini", resp.StatusCode, body, resp.Header)
 	}
 
 	var aiResp geminiResponse
@@ -142,7 +142,7 @@ func (c *GeminiClient) GenerateStream(ctx context.Context, messages []Message, o
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(body))
+		return Response{}, NewAPIError("gemini", resp.StatusCode, body, resp.Header)
 	}
 
 	var fullText strings.Builder

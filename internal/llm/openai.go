@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -82,7 +81,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, messages []Message) (Respon
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return Response{}, NewAPIError("openai", resp.StatusCode, body, resp.Header)
 	}
 
 	var aiResp openAIResponse
@@ -167,7 +166,7 @@ func (c *OpenAIClient) GenerateStream(ctx context.Context, messages []Message, o
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return Response{}, NewAPIError("openai", resp.StatusCode, body, resp.Header)
 	}
 
 	var fullText strings.Builder
