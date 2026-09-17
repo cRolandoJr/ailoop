@@ -50,13 +50,14 @@ func (l *Loop) Status() (*StatusReport, error) {
 	return r, nil
 }
 
-// Cost returns the ledger as data. Formatting is the caller's problem.
-func (l *Loop) Cost() (*state.Ledger, error) {
+// Cost returns the ledger and the ceiling it runs against. Formatting is the
+// caller's problem.
+func (l *Loop) Cost() (*state.Ledger, state.Budget, error) {
 	s, err := l.load()
 	if err != nil {
-		return nil, err
+		return nil, state.Budget{}, err
 	}
-	return &s.Spend, nil
+	return &s.Spend, s.Budget, nil
 }
 
 // RevisionInfo is one archived revision of an artifact.

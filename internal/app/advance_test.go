@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,5 +358,40 @@ func TestHabiendoLeidoElParcheSiEntra(t *testing.T) {
 	data, _ := os.ReadFile(destino)
 	if string(data) != "valor nuevo\n" {
 		t.Errorf("no aplico el parche: %q", string(data))
+	}
+}
+
+func TestElPresupuestoCortaAntesDeLlamarAlModelo(t *testing.T) {
+	// Chequear despues de gastar produce un recibo, no un limite.
+	s := state.NewState("tarea")
+	s.Budget = state.Budget{MaxTokens: 100}
+	s.Spend.Record(state.PhaseDiscovery, llm.Usage{InputTokens: 90, OutputTokens: 20})
+
+	m := &modeloScript{}
+	l := loopParaAvanzar(t, s, nil, m)
+
+	_, err := l.Advance(context.Background(), AdvanceOptions{Review: apruebaSiempre})
+	if err == nil {
+		t.Fatal("avanzo con el presupuesto agotado")
+	}
+	if !errors.Is(err, state.ErrOverBudget) {
+		t.Errorf("err = %v, quiero ErrOverBudget", err)
+	}
+	if m.llamadas != 0 {
+		t.Errorf("llamo al modelo %d veces con el techo agotado", m.llamadas)
+	}
+}
+
+func TestConPresupuestoDisponibleAvanzaNormal(t *testing.T) {
+	s := state.NewState("tarea")
+	s.Budget = state.Budget{MaxTokens: 100000}
+
+	l := loopParaAvanzar(t, s, nil, &modeloScript{})
+	out, err := l.Advance(context.Background(), AdvanceOptions{Review: apruebaSiempre})
+	if err != nil {
+		t.Fatalf("no avanzo teniendo presupuesto: %v", err)
+	}
+	if !out.Advanced {
+		t.Error("no avanzo")
 	}
 }

@@ -9,6 +9,17 @@ import (
 
 const backupSubdir = "backups"
 
+// backupRoot is deliberately NOT per-branch.
+//
+// State is per-branch because a spec and a design belong to a line of work.
+// Backups are not: they are the previous contents of files in the WORKING
+// TREE, and there is one working tree. Filing them under the branch name made
+// "git checkout -b idea" hide them, and then a rollback restored nothing and
+// reported "nothing to roll back" - the exact failure this package was fixed
+// to stop having.
+//
+// Separate git worktrees already get separate backups, because each has its
+// own workspace path.
 func backupRoot(workspace string) string {
 	return filepath.Join(workspace, ".ailoop", backupSubdir)
 }

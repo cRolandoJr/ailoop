@@ -3,16 +3,16 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"github.com/cRolandoJr/ailoop/internal/env"
 	"os"
 	"path/filepath"
 )
 
-const stateDir = ".ailoop"
 const stateFile = "state.json"
 
 // Save writes the AIState to the target project directory
 func Save(targetDir string, s *AIState) error {
-	dirPath := filepath.Join(targetDir, stateDir)
+	dirPath := env.AILoopDir(targetDir)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func Save(targetDir string, s *AIState) error {
 
 // Load reads the AIState from the target project directory
 func Load(targetDir string) (*AIState, error) {
-	filePath := filepath.Join(targetDir, stateDir, stateFile)
+	filePath := filepath.Join(env.AILoopDir(targetDir), stateFile)
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return nil, errors.New("no active AI Loop found. Run 'ailoop start' first")

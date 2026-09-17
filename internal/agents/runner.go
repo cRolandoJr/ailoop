@@ -30,9 +30,35 @@ type ToolObserver func(res tools.Result)
 // workspace and declaredCmds enable the tool loop: the agent may inspect the
 // real project instead of describing one it imagined. reg decides what it is
 // allowed to inspect.
-func RunPhase(ctx context.Context, s *state.AIState, projectContext string, client llm.Client,
-	workspace string, declaredCmds map[string]string, pool *mcp.Pool, fetcher *web.Fetcher,
-	observe ToolObserver) (string, error) {
+// PhaseInput is everything a phase agent needs.
+//
+// It replaced eight positional parameters. A function that takes eight things
+// is one where the caller gets the order wrong eventually, and where adding a
+// ninth touches every call site.
+type PhaseInput struct {
+	State          *state.AIState
+	Client         llm.Client
+	Workspace      string
+	ProjectContext string
+	// Attachments are images the person attached with @references. They are
+	// only sent when the model reports vision.
+	Attachments  []llm.Image
+	DeclaredCmds map[string]string
+	Pool         *mcp.Pool
+	Fetcher      *web.Fetcher
+	Observe      ToolObserver
+}
+
+// RunPhase executes the agent of the current phase.
+func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
+	s := in.State
+	client := in.Client
+	projectContext := in.ProjectContext
+	workspace := in.Workspace
+	declaredCmds := in.DeclaredCmds
+	pool := in.Pool
+	fetcher := in.Fetcher
+	observe := in.Observe
 
 	sysPrompt := getSystemPromptForPhase(s.CurrentPhase)
 	if sysPrompt == "" {
@@ -79,12 +105,23 @@ func RunPhase(ctx context.Context, s *state.AIState, projectContext string, clie
 
 	messages := []llm.Message{
 		{Role: "system", Content: sysPrompt, Round: -1},
-		{Role: "user", Content: contextMsg + "\nPlease proceed with your phase.", Round: -1},
+		{
+			Role:    "user",
+			Content: contextMsg + "\nPlease proceed with your phase.",
+			Images:  visibleTo(client, in.Attachments),
+			Round:   -1,
+		},
 	}
 
 	// Tool loop: generate, honour any inspection the agent asked for, feed the
 	// real answers back, and let it decide again.
 	for round := 0; ; round++ {
+		// Before spending, not after. A check that runs afterwards reports a
+		// number already spent: that is a receipt, not a limit.
+		if err := s.Budget.Check(&s.Spend); err != nil {
+			return "", err
+		}
+
 		// Elide observations the agent has already reasoned past. Cheap when
 		// there is nothing to elide, and it is what keeps a long exploration
 		// from re-paying for everything it already read.
@@ -133,6 +170,9 @@ func RunPhase(ctx context.Context, s *state.AIState, projectContext string, clie
 				llm.Message{Role: "assistant", Content: reply, Round: round},
 				llm.Message{Role: "user", Content: "Tool budget exhausted. Answer now with what you have, and state explicitly anything you could not verify.", Round: round},
 			)
+			if err := s.Budget.Check(&s.Spend); err != nil {
+				return "", err
+			}
 			last, err := client.Generate(ctx, messages)
 			if err != nil {
 				return "", err
@@ -164,6 +204,9 @@ func getSystemPromptForPhase(phase state.Phase) string {
 	// ADAPTIVE TEACHING: Injected strictly in the base prompts
 	baseTeaching := "\n\nThe user is a Junior developer. Do not use 'black magic' or overly complex abstractions unless necessary. Briefly explain the design patterns used and WHY you chose this approach so the user can learn."
 
+	// LOCAL RAG: Ensure the agent knows how to search effectively
+	localRAG := "\n\nCRITICAL (Local RAG): When exploring large codebases, do NOT blindly guess paths or ask for files without knowing they exist. Actively use `fs.grep` (to search by keywords) and `fs.glob`/`fs.list` (to find files) as your local Retrieval-Augmented Generation (RAG) system to index the project before reading files."
+
 	switch phase {
 	case state.PhaseDiscovery:
 		return `You are the Discovery Agent. Your job is to understand the user's task and identify any major decisions needed. 
@@ -172,7 +215,7 @@ If you make an architectural decision, emit it using this exact format anywhere 
 <<<< DECISION
 Statement: <short binding decision>
 Rationale: <why it was chosen>
->>>>`
+>>>>` + localRAG
 	case state.PhaseDesign:
 		return `You are the Design Agent. Your job is to take the Discovery summary and produce a clear Design and Test Strategy.
 Output a concise design. Do NOT write the actual implementation code yet.
@@ -180,7 +223,7 @@ If you make a binding design decision, emit it using this exact format anywhere 
 <<<< DECISION
 Statement: <short binding decision>
 Rationale: <why it was chosen>
->>>>` + baseTeaching
+>>>>` + baseTeaching + localRAG
 	case state.PhasePlan:
 		return `You are the Plan Agent. Your job is to take the approved Design and produce a step-by-step checklist of tasks required to implement it.
 Format the output as a Markdown checklist. Do NOT write the implementation code yet.` + baseTeaching
@@ -197,7 +240,7 @@ exact existing lines to be replaced (including leading whitespace)
 ====
 new lines to replace them with
 >>>>
-` + baseTeaching
+` + baseTeaching + localRAG
 	case state.PhaseVerification:
 		return `You are the Verification Agent. Review the code changes and verify they meet the Design.`
 	default:
@@ -280,4 +323,14 @@ func checkCitations(workspace, text string) []string {
 	}
 
 	return invalid
+}
+
+// visibleTo drops attached images when the model cannot see them. Sending an
+// image to a model without vision costs tokens and returns a confident
+// description of nothing.
+func visibleTo(client llm.Client, images []llm.Image) []llm.Image {
+	if len(images) == 0 || !client.Describe().Vision.OK() {
+		return nil
+	}
+	return images
 }

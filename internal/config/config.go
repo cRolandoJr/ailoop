@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/cRolandoJr/ailoop/internal/mcp"
+	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/cRolandoJr/ailoop/internal/verify"
 )
 
@@ -32,6 +33,9 @@ type Config struct {
 	// MCP are external tool servers to connect to. Their tools become
 	// capabilities of the loop without being reimplemented here.
 	MCP []mcp.Server `json:"mcp,omitempty"`
+	// Budget is the default ceiling for work started in this project. A run
+	// can lower it with --budget.
+	Budget state.Budget `json:"budget,omitempty"`
 	// Web is where the research agent may go. Empty means nowhere, which is
 	// the default: research is opt-in, per project.
 	Web WebPolicy `json:"web,omitempty"`

@@ -36,6 +36,9 @@ type AIState struct {
 	Record DecisionRecord `json:"decision_record"`
 	// Spend is what the work has cost so far, per phase.
 	Spend Ledger `json:"spend"`
+	// Budget is the ceiling for this work item, checked before every model
+	// call.
+	Budget Budget `json:"budget,omitempty"`
 	// FilesRead are the workspace files the agent has actually read during
 	// this work item. A patch may only touch a file that appears here: an
 	// agent patching a file it never opened has invented the search text.

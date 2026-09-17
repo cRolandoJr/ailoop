@@ -44,7 +44,18 @@ func AskApprovalInteractive(proposal string) (bool, string, []patch.Block) {
 	var rejectedReasons []string
 
 	for i, b := range blocks {
-		fmt.Println(pterm.DefaultBox.WithTitle(fmt.Sprintf("Patch %d/%d: %s", i+1, len(blocks), b.FilePath)).Sprint(fmt.Sprintf("- SEARCH:\n%s\n+ REPLACE:\n%s", b.Search, b.Replace)))
+		searchLines := strings.Split(b.Search, "\n")
+		for j, l := range searchLines {
+			searchLines[j] = pterm.FgRed.Sprintf("- %s", l)
+		}
+		replaceLines := strings.Split(b.Replace, "\n")
+		for j, l := range replaceLines {
+			replaceLines[j] = pterm.FgGreen.Sprintf("+ %s", l)
+		}
+
+		diffBox := pterm.DefaultBox.WithTitle(fmt.Sprintf("Patch %d/%d: %s", i+1, len(blocks), b.FilePath)).
+			Sprint(fmt.Sprintf("%s\n%s", strings.Join(searchLines, "\n"), strings.Join(replaceLines, "\n")))
+		fmt.Println(diffBox)
 
 		res, _ := pterm.DefaultInteractiveConfirm.Show("Approve this patch?")
 		if res {

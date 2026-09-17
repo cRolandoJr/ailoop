@@ -197,6 +197,61 @@ apagarlo. Opcionalmente `"allowed"` restringe destinos y `"blocked"` los excluye
 Ese canal no se cierra sin volver inútil la función; se mantiene **angosto** (500
 caracteres), **visible** (se muestra como cualquier otra herramienta) y **registrado**.
 
+## Referencias en el texto
+
+Cualquier cosa que escribas —la tarea, el motivo de un rechazo— acepta referencias:
+
+```
+ailoop start "arreglá el alineado, mirá @captura.png y @src/boton.tsx"
+```
+
+| Referencia | Qué adjunta | Necesita |
+|---|---|---|
+| `@main.go` | el contenido del archivo | — |
+| `@~/Descargas/spec.pdf` | el texto del PDF | `pdftotext` |
+| `@captura.png` | la imagen | un modelo con visión |
+| `@screen` / `@screen:select` | la pantalla, o una región | `grim` / `slurp` |
+| `@clipboard` | lo que tengas copiado, texto o imagen | `wl-paste` |
+
+`ailoop doctor` te dice cuáles de esas herramientas tenés y qué perdés por las que falten.
+
+### Dos reglas que hacen que esto sea seguro
+
+**Las referencias son tuyas, no del agente.** Por eso pueden salir del workspace:
+escribir `@~/Descargas/spec.pdf` **es** la autorización, dada caso por caso. El
+agente, con `fs.read` y `fs.grep`, sigue confinado al workspace — ahí nadie
+autorizó nada.
+
+**`@screen` nunca es una capacidad del agente.** Sólo ocurre porque vos lo
+escribiste. Un agente que pudiera capturar la pantalla cuando quisiera vería tu
+gestor de contraseñas, tu correo, lo que tengas abierto.
+
+### Lo volátil se congela
+
+Si rechazás una propuesta con *"esto está mal, mirá @screen"*, la captura se hace
+**en ese momento** y se guarda junto al estado del trabajo. El agente lee ese motivo
+en la corrida siguiente, cuando la pantalla ya muestra otra cosa; sin congelarla,
+fotografiaría cualquier cosa.
+
+## Portabilidad
+
+El núcleo es Go y no depende de nada: la máquina de estados, las guardas, el ledger,
+el presupuesto y el parcheo se comportan igual en todas partes. Lo que varía es el
+entorno, y esas capacidades se **descubren**, no se asumen.
+
+```sh
+nix develop    # desarrollar: las herramientas en el PATH
+nix build      # el binario, con sus dependencias colgadas
+nix run github:cRolandoJr/ailoop
+```
+
+La diferencia importa: un devShell resuelve el PATH de quien lo abre; el paquete usa
+`wrapProgram`, así que el binario lleva `poppler-utils`, `grim`, `slurp` y
+`wl-clipboard` sin que estén instalados en la máquina.
+
+Sin Nix también funciona: las capacidades cuya herramienta falte simplemente no se
+ofrecen, y `ailoop doctor` dice cuáles son.
+
 ## Seguridad de los parches
 
 - Las rutas se validan contra el workspace: se rechazan absolutas y las que

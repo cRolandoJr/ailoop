@@ -13,7 +13,10 @@ package app
 import (
 	"errors"
 
+	"path/filepath"
+
 	"github.com/cRolandoJr/ailoop/internal/config"
+	"github.com/cRolandoJr/ailoop/internal/env"
 	"github.com/cRolandoJr/ailoop/internal/llm"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
 	"github.com/cRolandoJr/ailoop/internal/state"
@@ -76,4 +79,10 @@ func (l *Loop) web() *web.Fetcher {
 		Blocked:  l.cfg.Web.Blocked,
 		MaxBytes: l.cfg.Web.MaxBytes,
 	}
+}
+
+// attachmentsDir is where frozen attachments live: beside the state of this
+// work item, because that is what they belong to.
+func (l *Loop) attachmentsDir() string {
+	return filepath.Join(env.AILoopDir(l.workspace), "attachments")
 }

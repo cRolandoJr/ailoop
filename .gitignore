@@ -3,3 +3,7 @@
 
 # estado del propio loop cuando se corre sobre este repo
 .ailoop/
+
+# symlink que deja 'nix build'
+/result
+/result-*

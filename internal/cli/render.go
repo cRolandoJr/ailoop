@@ -40,8 +40,11 @@ func artifactMark(a app.ArtifactState) string {
 	}
 }
 
-func Cost(l *state.Ledger) {
+func Cost(l *state.Ledger, b state.Budget) {
 	fmt.Print(l.Report())
+	if b.Set() {
+		fmt.Printf("\nBudget: %s\n", b.Remaining(l))
+	}
 }
 
 func History(hs []app.ArtifactHistory) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cRolandoJr/ailoop/internal/agents"
+	"github.com/cRolandoJr/ailoop/internal/attach"
 	"github.com/cRolandoJr/ailoop/internal/patch"
 	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/cRolandoJr/ailoop/internal/tools"
@@ -95,6 +96,10 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 
 	out := &AdvanceOutcome{From: s.CurrentPhase}
 
+	// One resolver for the whole turn: discovering the host's tools is a
+	// handful of PATH lookups, and doing it per reference would repeat them.
+	resolver := attach.New(l.workspace)
+
 	// Every file the agent reads is recorded, because a patch may only touch
 	// a file it actually opened. The wrapper keeps the caller's own observer
 	// working: the CLI still gets to show what was inspected.
@@ -113,7 +118,7 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 	for {
 		opts.progress("phase-start", string(s.CurrentPhase))
 
-		proposal, err := l.propose(ctx, s, opts)
+		proposal, err := l.propose(ctx, s, opts, resolver)
 		if err != nil {
 			return nil, err
 		}
@@ -135,8 +140,14 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 		}
 
 		if !decision.Approved {
-			s.RejectionReason = decision.Reason
-			s.RejectCurrentProposal(proposal, decision.Reason, time.Now())
+			// Freeze @screen and @clipboard now: the agent reads this reason
+			// on the next run, when the screen shows something else.
+			reason, frozenProblems := resolver.Freeze(l.attachmentsDir(), decision.Reason)
+			for _, p := range frozenProblems {
+				opts.progress("attachment", p.Error())
+			}
+			s.RejectionReason = reason
+			s.RejectCurrentProposal(proposal, reason, time.Now())
 			out.Rejected = true
 			out.To = s.CurrentPhase
 			return out, l.save(s)
@@ -202,10 +213,27 @@ func (e *GuardError) Error() string { return e.Err.Error() }
 func (e *GuardError) Unwrap() error { return e.Err }
 
 // propose runs the phase agent, with the adversarial critic when asked.
-func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOptions) (string, error) {
+func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOptions, resolver *attach.Resolver) (string, error) {
+	// @references the person wrote, resolved fresh each turn: a file they
+	// pointed at may have changed since they pointed at it.
+	atts, problems := resolver.Expand(s.TaskDescription + " " + s.RejectionReason)
+	for _, p := range problems {
+		opts.progress("attachment", p.Error())
+	}
+	projectContext := opts.ProjectContext + attach.Render(atts)
+
 	run := func() (string, error) {
-		return agents.RunPhase(ctx, s, opts.ProjectContext, l.client,
-			l.workspace, l.declaredCommands(), l.pool, l.web(), opts.OnTool)
+		return agents.RunPhase(ctx, agents.PhaseInput{
+			State:          s,
+			Client:         l.client,
+			Workspace:      l.workspace,
+			ProjectContext: projectContext,
+			Attachments:    attach.Images(atts),
+			DeclaredCmds:   l.declaredCommands(),
+			Pool:           l.pool,
+			Fetcher:        l.web(),
+			Observe:        opts.OnTool,
+		})
 	}
 
 	criticApplies := opts.UseCritic &&
@@ -223,6 +251,11 @@ func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOption
 			return "", err
 		}
 
+		if err := s.Budget.Check(&s.Spend); err != nil {
+			// The critic is a real call and can run three times per phase.
+			opts.progress("budget", err.Error())
+			break
+		}
 		critique, err := agents.EvaluateProposal(ctx, s.TaskDescription, proposal, l.client)
 		if critique != nil {
 			s.Spend.Record(s.CurrentPhase, critique.Usage)
