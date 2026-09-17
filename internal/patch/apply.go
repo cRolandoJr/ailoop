@@ -45,7 +45,8 @@ func SafeRelPath(workspace, proposed string) (string, error) {
 	return clean, nil
 }
 
-type block struct {
+// Block represents a single SEARCH/REPLACE operation.
+type Block struct {
 	FilePath string
 	Search   string
 	Replace  string
@@ -54,8 +55,11 @@ type block struct {
 // Apply parses SEARCH/REPLACE blocks out of the proposal and applies them
 // inside workspace. It applies nothing unless every block is valid: a patch
 // that half-lands is worse than one that does not land.
-func Apply(workspace, proposal string) error {
-	blocks, err := parseBlocks(proposal)
+//
+// seen is the set of files the agent read. A nil seen disables the check,
+// which is what a caller with no agent involved passes.
+func Apply(workspace, proposal string, seen Seen) error {
+	blocks, err := ParseBlocks(proposal)
 	if err != nil {
 		return err
 	}
@@ -63,13 +67,30 @@ func Apply(workspace, proposal string) error {
 		return nil
 	}
 
-	// Validate every path before touching the disk.
+	return ApplyBlocks(workspace, blocks, seen)
+}
+
+// ApplyBlocks applies a pre-parsed list of blocks. seen works as in Apply.
+func ApplyBlocks(workspace string, blocks []Block, seen Seen) error {
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	// Validate every path before touching the disk. Both checks run over all
+	// blocks first: a patch that half-lands is worse than one that does not.
 	for i := range blocks {
 		rel, err := SafeRelPath(workspace, blocks[i].FilePath)
 		if err != nil {
 			return fmt.Errorf("refusing patch: %w", err)
 		}
 		blocks[i].FilePath = rel
+
+		// A nil seen means the caller opted out of the check. An empty but
+		// non-nil seen means the agent read nothing, and then no patch is
+		// legitimate.
+		if seen != nil && !seen.Has(rel) {
+			return unreadError(rel, seen)
+		}
 	}
 
 	for _, b := range blocks {
@@ -80,8 +101,9 @@ func Apply(workspace, proposal string) error {
 	return nil
 }
 
-func parseBlocks(text string) ([]block, error) {
-	var blocks []block
+// ParseBlocks parses the text proposal into blocks without applying them.
+func ParseBlocks(text string) ([]Block, error) {
+	var blocks []Block
 
 	parts := strings.Split(text, "<<<<\n")
 	if len(parts) <= 1 {
@@ -100,7 +122,7 @@ func parseBlocks(text string) ([]block, error) {
 			return nil, errors.New("malformed patch: expected path ==== search ==== replace")
 		}
 
-		blocks = append(blocks, block{
+		blocks = append(blocks, Block{
 			FilePath: strings.TrimSpace(sections[0]),
 			Search:   strings.TrimSuffix(sections[1], "\n"),
 			Replace:  strings.TrimSuffix(sections[2], "\n"),
@@ -110,7 +132,7 @@ func parseBlocks(text string) ([]block, error) {
 	return blocks, nil
 }
 
-func applyBlock(workspace string, b block) error {
+func applyBlock(workspace string, b Block) error {
 	full := filepath.Join(workspace, b.FilePath)
 
 	if err := Backup(workspace, b.FilePath); err != nil {

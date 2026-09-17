@@ -72,3 +72,48 @@ func TestReviseDesdeVacioNoArchivaUnFantasma(t *testing.T) {
 		t.Errorf("archivo una revision vacia: %+v", d.History)
 	}
 }
+
+func TestReopenCurrentPhaseRetiraLaAprobacion(t *testing.T) {
+	// Volver atras no puede dejar aprobado algo que nadie volvio a mirar.
+	s := NewState("tarea")
+	s.CurrentPhase = PhaseDesign
+	s.Design = Document{Version: 2, Content: "diseno aprobado", Approved: true}
+
+	s.ReopenCurrentPhase(time.Now())
+
+	if s.Design.Approved {
+		t.Error("quedo aprobado despues de reabrir la fase")
+	}
+	if s.Design.Content != "" {
+		t.Errorf("no vacio el contenido: %q", s.Design.Content)
+	}
+	if len(s.Design.History) != 1 || s.Design.History[0].Content != "diseno aprobado" {
+		t.Errorf("no archivo lo que habia: %+v", s.Design.History)
+	}
+}
+
+func TestRecordApprovalEscribeEnElArtefactoDeLaFase(t *testing.T) {
+	s := NewState("tarea")
+	s.CurrentPhase = PhasePlan
+	s.RecordApproval("el plan")
+
+	if s.Plan.Content != "el plan" || !s.Plan.Approved {
+		t.Errorf("Plan = %+v", s.Plan)
+	}
+	if s.Spec.Content != "" || s.Design.Content != "" {
+		t.Error("escribio en el artefacto de otra fase")
+	}
+}
+
+func TestRejectCurrentProposalArchivaEnLaFaseCorrecta(t *testing.T) {
+	s := NewState("tarea")
+	s.CurrentPhase = PhaseDesign
+	s.RejectCurrentProposal("propuesta mala", "no contempla X", time.Now())
+
+	if len(s.Design.History) != 1 {
+		t.Fatalf("Design.History = %d, quiero 1", len(s.Design.History))
+	}
+	if len(s.Spec.History) != 0 {
+		t.Error("archivo en el artefacto equivocado")
+	}
+}

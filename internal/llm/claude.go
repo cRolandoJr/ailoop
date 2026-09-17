@@ -120,6 +120,16 @@ func (c *ClaudeClient) Generate(ctx context.Context, messages []Message) (Respon
 	}, nil
 }
 
+// GenerateStream implements llm.Client by calling Generate and pushing the full response to onChunk.
+// For true streaming with the Anthropic SDK, we would use Messages.NewStreaming.
+func (c *ClaudeClient) GenerateStream(ctx context.Context, messages []Message, onChunk func(string)) (Response, error) {
+	resp, err := c.Generate(ctx, messages)
+	if err == nil && onChunk != nil && resp.Text != "" {
+		onChunk(resp.Text)
+	}
+	return resp, err
+}
+
 // blocksFor turns a message into content blocks, images first: a question
 // about an image reads better after the image, as with a document.
 func blocksFor(m Message) []anthropic.ContentBlockParamUnion {

@@ -118,6 +118,71 @@ func (c *GeminiClient) Generate(ctx context.Context, messages []Message) (Respon
 	return Response{Text: text.String(), Usage: u}, nil
 }
 
+func (c *GeminiClient) GenerateStream(ctx context.Context, messages []Message, onChunk func(string)) (Response, error) {
+	reqBody := buildGeminiRequest(messages)
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return Response{}, err
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse", c.Model)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return Response{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.APIKey)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var fullText strings.Builder
+	var lastUsage Usage
+
+	err = readSSE(resp.Body, func(data []byte) error {
+		var chunk geminiResponse
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			return err
+		}
+		if len(chunk.Candidates) > 0 && len(chunk.Candidates[0].Content.Parts) > 0 {
+			for _, p := range chunk.Candidates[0].Content.Parts {
+				text := p.Text
+				fullText.WriteString(text)
+				if text != "" {
+					onChunk(text)
+				}
+			}
+		}
+		if chunk.UsageMetadata.CandidatesTokenCount > 0 || chunk.UsageMetadata.PromptTokenCount > 0 {
+			lastUsage = Usage{
+				InputTokens:     chunk.UsageMetadata.PromptTokenCount,
+				OutputTokens:    chunk.UsageMetadata.CandidatesTokenCount,
+				CacheReadTokens: chunk.UsageMetadata.CachedContentTokenCount,
+			}
+		}
+		return nil
+	})
+
+	if lastUsage.InputTokens == 0 && lastUsage.OutputTokens == 0 {
+		lastUsage = Usage{
+			InputTokens:  EstimateMessages(messages),
+			OutputTokens: EstimateTokens(fullText.String()),
+			Estimated:    true,
+		}
+	}
+
+	return Response{Text: fullText.String(), Usage: lastUsage}, err
+}
+
 // buildGeminiRequest maps the provider-neutral messages onto Gemini's shape.
 // Split out so it can be tested without a network call.
 func buildGeminiRequest(messages []Message) geminiRequest {

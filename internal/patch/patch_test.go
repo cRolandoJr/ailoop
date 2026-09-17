@@ -56,7 +56,7 @@ func TestApplyRechazaTodoSiUnPathEsMalo(t *testing.T) {
 	prop := "<<<<\nok.txt\n====\nhola\n====\nchau\n>>>>\n" +
 		"<<<<\n../fuera.txt\n====\na\n====\nb\n>>>>\n"
 
-	err := Apply(ws, prop)
+	err := Apply(ws, prop, nil)
 	if !errors.Is(err, ErrOutsideWorkspace) {
 		t.Fatalf("err = %v, quiero ErrOutsideWorkspace", err)
 	}
@@ -76,7 +76,7 @@ func TestApplyRechazaBusquedaAmbigua(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Apply(ws, "<<<<\ndup.go\n====\nx := 1\n====\nx := 9\n>>>>\n")
+	err := Apply(ws, "<<<<\ndup.go\n====\nx := 1\n====\nx := 9\n>>>>\n", nil)
 	if err == nil {
 		t.Fatalf("aplico un patch ambiguo sin avisar")
 	}
@@ -88,10 +88,10 @@ func TestApplyRechazaBusquedaAmbigua(t *testing.T) {
 func TestParseBlocksAvisaCuandoElBloqueEstaRoto(t *testing.T) {
 	// Antes, un bloque sin cerrar se descartaba en silencio: el usuario
 	// aprobaba una implementacion que no se aplicaba nunca.
-	if _, err := parseBlocks("<<<<\nfile.go\n====\na\n====\nb\n"); err == nil {
+	if _, err := ParseBlocks("<<<<\nfile.go\n====\na\n====\nb\n"); err == nil {
 		t.Errorf("un bloque sin >>>> no produjo error")
 	}
-	if _, err := parseBlocks("<<<<\nfile.go\n====\nsolo dos secciones\n>>>>\n"); err == nil {
+	if _, err := ParseBlocks("<<<<\nfile.go\n====\nsolo dos secciones\n>>>>\n"); err == nil {
 		t.Errorf("un bloque incompleto no produjo error")
 	}
 }
@@ -114,7 +114,7 @@ func TestCicloCompletoBackupYRestore(t *testing.T) {
 	prop := "<<<<\na/main.go\n====\noriginal de a/main.go\n====\nPARCHEADO a\n>>>>\n" +
 		"<<<<\nb/main.go\n====\noriginal de b/main.go\n====\nPARCHEADO b\n>>>>\n"
 
-	if err := Apply(ws, prop); err != nil {
+	if err := Apply(ws, prop, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 

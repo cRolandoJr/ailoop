@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // OpenAIClient implements the Client interface for OpenAI-compatible APIs (like Ollama, LM Studio, etc.)
@@ -21,6 +22,7 @@ type OpenAIClient struct {
 type openAIRequest struct {
 	Model    string          `json:"model"`
 	Messages []openAIMessage `json:"messages"`
+	Stream   bool            `json:"stream,omitempty"`
 }
 
 type openAIMessage struct {
@@ -110,4 +112,96 @@ func (c *OpenAIClient) Generate(ctx context.Context, messages []Message) (Respon
 	}
 
 	return Response{Text: text, Usage: u}, nil
+}
+
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+	} `json:"choices"`
+	// Usage is only sent in the last chunk if stream_options.include_usage is set,
+	// but for simplicity we can estimate if omitted.
+	Usage *struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
+}
+
+func (c *OpenAIClient) GenerateStream(ctx context.Context, messages []Message, onChunk func(string)) (Response, error) {
+	reqBody := openAIRequest{
+		Model:  c.Model,
+		Stream: true,
+	}
+
+	for _, m := range messages {
+		reqBody.Messages = append(reqBody.Messages, openAIMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		})
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return Response{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return Response{}, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var fullText strings.Builder
+	var lastUsage Usage
+
+	err = readSSE(resp.Body, func(data []byte) error {
+		var chunk openAIStreamChunk
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			return err
+		}
+		if len(chunk.Choices) > 0 {
+			text := chunk.Choices[0].Delta.Content
+			fullText.WriteString(text)
+			if text != "" {
+				onChunk(text)
+			}
+		}
+		if chunk.Usage != nil {
+			lastUsage = Usage{
+				InputTokens:     chunk.Usage.PromptTokens,
+				OutputTokens:    chunk.Usage.CompletionTokens,
+				CacheReadTokens: chunk.Usage.PromptTokensDetails.CachedTokens,
+			}
+		}
+		return nil
+	})
+
+	if lastUsage.InputTokens == 0 && lastUsage.OutputTokens == 0 {
+		lastUsage = Usage{
+			InputTokens:  EstimateMessages(messages),
+			OutputTokens: EstimateTokens(fullText.String()),
+			Estimated:    true,
+		}
+	}
+
+	return Response{Text: fullText.String(), Usage: lastUsage}, err
 }

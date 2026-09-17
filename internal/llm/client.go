@@ -85,6 +85,9 @@ type Client interface {
 	// with what it cost. Every provider reports cost differently and some not
 	// at all; each adapter normalises into Usage and marks estimates.
 	Generate(ctx context.Context, messages []Message) (Response, error)
+	// GenerateStream is like Generate but streams chunks of the response as they arrive.
+	// It calls onChunk with each new piece of text. It returns the final combined response and usage.
+	GenerateStream(ctx context.Context, messages []Message, onChunk func(string)) (Response, error)
 	// Describe reports what this provider and model can do. It is how the
 	// workflow stops hardcoding capabilities per provider.
 	Describe() Capabilities

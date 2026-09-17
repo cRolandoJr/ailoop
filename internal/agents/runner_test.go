@@ -26,6 +26,17 @@ type fakeLLM struct {
 
 func (f *fakeLLM) Describe() llm.Capabilities { return f.caps }
 
+// GenerateStream reusa Generate y entrega el texto de una: el doble no
+// necesita simular el streaming, sino cumplir el contrato del puerto. Si un
+// test necesitara los chunks, se le agrega ahi.
+func (f *fakeLLM) GenerateStream(ctx context.Context, messages []llm.Message, onChunk func(string)) (llm.Response, error) {
+	resp, err := f.Generate(ctx, messages)
+	if err == nil && onChunk != nil && resp.Text != "" {
+		onChunk(resp.Text)
+	}
+	return resp, err
+}
+
 func (f *fakeLLM) Generate(ctx context.Context, messages []llm.Message) (llm.Response, error) {
 	f.seen = append(f.seen, messages)
 	if f.calls >= len(f.replies) {
@@ -284,5 +295,25 @@ func TestElLedgerRegistraCadaLlamadaDelToolLoop(t *testing.T) {
 	}
 	if ps.Usage.InputTokens != 300 {
 		t.Errorf("InputTokens = %d, quiero 300", ps.Usage.InputTokens)
+	}
+}
+
+func TestAlImplementadorSeLeAvisaQueLeaAntesDeParchear(t *testing.T) {
+	// Una regla que se aplica pero no se comunica solo produce reintentos.
+	f := &fakeLLM{replies: []string{"ok"}}
+	s := state.NewState("tarea")
+	s.CurrentPhase = state.PhaseImplementation
+
+	if _, err := RunPhase(context.Background(), s, "", f, t.TempDir(), nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var sys string
+	for _, m := range f.seen[0] {
+		if m.Role == "system" {
+			sys += m.Content
+		}
+	}
+	if !strings.Contains(sys, "fs.read BEFORE") {
+		t.Errorf("no le avisa que lea antes de parchear:\n%s", sys)
 	}
 }

@@ -86,7 +86,14 @@ func RunPhase(ctx context.Context, s *state.AIState, projectContext string, clie
 			})
 		}
 
-		resp, err := client.Generate(ctx, messages)
+		// Provide visual newline separation for stream output
+		fmt.Printf("\n\n---\n[%s Agent - Round %d]\n\n", s.CurrentPhase, round+1)
+
+		resp, err := client.GenerateStream(ctx, messages, func(chunk string) {
+			fmt.Print(chunk)
+		})
+		fmt.Println() // Newline after stream finishes
+
 		if err != nil {
 			return "", err
 		}
@@ -170,7 +177,9 @@ Format the output as a Markdown checklist. Do NOT write the implementation code 
 	case state.PhaseImplementation:
 		return `You are the Implementation Agent. Your job is to write the code based on the approved Design and Project Context provided.
 Output the code changes required. 
-CRITICAL: To modify files, you MUST use the following exact block format for every change:
+CRITICAL: read a file with fs.read BEFORE proposing any change to it. A patch for a
+file you have not read will be refused: its search text would be invented.
+To modify files, you MUST use the following exact block format for every change:
 <<<<
 path/to/file.ext
 ====

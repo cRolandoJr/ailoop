@@ -66,3 +66,44 @@ func (d *Document) RejectProposal(proposal, reason string, now time.Time) {
 	d.Version++
 	d.Approved = false
 }
+
+// RejectCurrentProposal archives a proposal the user turned down, against
+// whichever artifact the current phase produces.
+//
+// It lived in main.go as a free function with a switch over phases. It
+// belongs here: the state is what knows which artifact a phase writes.
+func (s *AIState) RejectCurrentProposal(proposal, reason string, now time.Time) {
+	if d := s.CurrentDocument(); d != nil {
+		d.RejectProposal(proposal, reason, now)
+	}
+}
+
+// ReopenCurrentPhase withdraws the approval of the current phase's artifact
+// and archives its content, because the work is going back to it.
+//
+// The approval was granted for a state of the work that no longer holds;
+// keeping it would let a guard wave through something nobody re-approved.
+func (s *AIState) ReopenCurrentPhase(now time.Time) {
+	d := s.CurrentDocument()
+	if d == nil {
+		return
+	}
+	if d.Content != "" {
+		d.RejectProposal(d.Content, "reopened", now)
+		d.Content = ""
+	}
+	d.Approved = false
+}
+
+// RecordApproval stores an approved proposal as the current artifact.
+func (s *AIState) RecordApproval(proposal string) {
+	if d := s.CurrentDocument(); d != nil {
+		d.Content = proposal
+		d.Approve()
+	}
+}
+
+// AppendNote adds a line to the decisions log of the current phase.
+func (s *AIState) AppendNote(note string) {
+	s.Decisions.Content += "\n" + note
+}
