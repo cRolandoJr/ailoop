@@ -39,6 +39,9 @@ type Config struct {
 	// Web is where the research agent may go. Empty means nowhere, which is
 	// the default: research is opt-in, per project.
 	Web WebPolicy `json:"web,omitempty"`
+	// LSP configures the language server protocol command for the workspace.
+	// Empty means detect automatically based on files.
+	LSP []string `json:"lsp,omitempty"`
 }
 
 // WebPolicy is the egress policy of this project.

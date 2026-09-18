@@ -21,7 +21,7 @@ func loopWatch(t *testing.T, s *state.AIState, checks []verify.Check) (*Loop, *[
 		t.Fatal(err)
 	}
 	var etapas []string
-	return NewLoop(dir, &modeloScript{}, nil, cfg), &etapas
+	return NewLoop(dir, &modeloScript{}, nil, cfg, nil), &etapas
 }
 
 func opcionesQueRegistran(etapas *[]string) AdvanceOptions {

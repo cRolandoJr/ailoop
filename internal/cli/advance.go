@@ -19,6 +19,7 @@ func Review(r app.ReviewRequest) app.ReviewDecision {
 	fmt.Println(panel)
 
 	if len(r.Blocks) > 0 {
+		ShowPatchProblems(r.Blocks, r.Problems)
 		approved, reason, blocks := ui.AskApprovalInteractive(r.Proposal)
 		return app.ReviewDecision{Approved: approved, Reason: reason, ApprovedBlocks: blocks}
 	}

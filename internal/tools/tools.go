@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/cRolandoJr/ailoop/internal/llm"
@@ -59,11 +60,15 @@ const (
 	// CmdRun runs one of the project's declared verification commands.
 	// It is never an arbitrary shell: only what the project itself declared.
 	CmdRun Capability = "cmd.run"
+	// LSPDefinition gets the location where a symbol is defined.
+	LSPDefinition Capability = "lsp.definition"
+	// LSPReferences gets the locations where a symbol is used.
+	LSPReferences Capability = "lsp.references"
 )
 
 // All is every capability this package implements, in the order they are
 // offered to a model.
-var All = []Capability{FSRead, FSList, FSGlob, FSGrep, FSReadImage, MCPDescribe, MCPCall, ResearchAsk, WebFetch, CmdRun}
+var All = []Capability{FSRead, FSList, FSGlob, FSGrep, FSReadImage, MCPDescribe, MCPCall, ResearchAsk, WebFetch, CmdRun, LSPDefinition, LSPReferences}
 
 // Request is one tool invocation asked for by the model.
 type Request struct {
@@ -71,6 +76,106 @@ type Request struct {
 	Arg string
 	// Raw is the block as the model wrote it, for error messages.
 	Raw string
+}
+
+// refusal explains why a request was turned down, distinguishing a name that
+// is not a capability from a capability this phase does not grant.
+//
+// They used to share one message. An agent that mistyped the block was told it
+// lacked permission, so it did the reasonable thing and tried a DIFFERENT
+// tool - with the same mistyped block. Measured: six rounds spent that way,
+// chasing a permissions problem that did not exist.
+func refusal(reg *Registry, c Capability) string {
+	for _, known := range All {
+		if known == c {
+			return fmt.Sprintf("REFUSED: capability %q is not permitted in this phase", c)
+		}
+	}
+
+	var here []string
+	for _, k := range All {
+		if reg.permits(k) {
+			here = append(here, string(k))
+		}
+	}
+	return fmt.Sprintf("REFUSED: %q is not the name of a capability. A tool block is one line: "+
+		"the name, a colon, and the argument. Available to you here: %s",
+		c, strings.Join(here, ", "))
+}
+
+// readError says what went wrong in the terms the agent works in.
+//
+// The raw os error carries the absolute path of the host, which is both a
+// leak and inconsistent with a registry that speaks workspace-relative paths
+// everywhere else. And "no such file" on its own leaves nowhere to go:
+// measured, an agent asked for the same missing file four rounds running.
+func readError(rel string, err error) error {
+	if os.IsNotExist(err) {
+		return fmt.Errorf("%s is not in this workspace. Use fs.list or fs.glob to see what is, "+
+			"and do not ask for this path again", rel)
+	}
+	if os.IsPermission(err) {
+		return fmt.Errorf("%s cannot be read: permission denied", rel)
+	}
+	return fmt.Errorf("%s could not be read", rel)
+}
+
+// exampleArg is the argument the opening example carries.
+//
+// For anything that takes a path it names a file that is really there.
+// Measured: with a fixed "internal/app/loop.go" a model copied the ARGUMENT
+// and built a decision around a file belonging to another repository. The
+// angle-bracket template made it copy the labels; a fixed path makes it copy
+// the path. A real one costs nothing when copied, because it reads.
+func exampleArg(c Capability, workspace string) string {
+	switch c {
+	case FSRead, FSReadImage, LSPDefinition, LSPReferences:
+		if f := aFileIn(workspace); f != "" {
+			if c == FSRead || c == FSReadImage {
+				return f
+			}
+			return f + ":12:4"
+		}
+	}
+	return sampleArg[c]
+}
+
+// aFileIn names one file at the top of the workspace, or "" when there is
+// none to name. One ReadDir, once per phase.
+func aFileIn(workspace string) string {
+	if workspace == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		return e.Name()
+	}
+	return ""
+}
+
+// sampleArg is one plausible argument per capability, for the example the
+// protocol opens with. The example is drawn from what this registry GRANTS:
+// a fixed one showed fs.read to the research agent, which must not learn
+// that a filesystem exists at all (AI_LOOP 18.15.7).
+var sampleArg = map[Capability]string{
+	FSRead:        "internal/app/loop.go",
+	FSList:        "internal/app",
+	FSGlob:        "internal/**/*_test.go",
+	FSGrep:        "func Normalizar -- **/*.go",
+	FSReadImage:   "docs/mockup.png",
+	MCPDescribe:   "codegraph.find_code",
+	MCPCall:       "codegraph.find_code {\"query\": \"where is Normalizar used\"}",
+	ResearchAsk:   "what does the Go http.Client CheckRedirect field do",
+	WebFetch:      "https://pkg.go.dev/net/http",
+	CmdRun:        "test",
+	LSPDefinition: "internal/app/loop.go:42:6",
+	LSPReferences: "internal/app/loop.go:42:6",
 }
 
 // Result is what the workspace answered.
@@ -97,6 +202,11 @@ type Registry struct {
 	// MCP is the pool of connected tool servers, or nil when none are
 	// configured.
 	MCP *mcp.Pool
+	// LSP is the language server protocol client, or nil.
+	LSP interface {
+		Definition(ctx context.Context, path string, line, char int) (string, error)
+		References(ctx context.Context, path string, line, char int) (string, error)
+	}
 	// Web retrieves pages. Only the research agent's registry carries one.
 	Web *web.Fetcher
 	// Research delegates a question to the research agent. It is a callback
@@ -138,6 +248,17 @@ func Parse(text string) []Request {
 		}
 		cap := Capability(strings.TrimSpace(body[:colon]))
 		arg := strings.TrimSpace(body[colon+1:])
+
+		// Some models read the protocol's placeholders as literal labels and
+		// emit "capability: fs.glob" over "argument: ...". Measured against
+		// qwen2.5-coder, which did it six times in a row. It is a fair reading
+		// of a template, and the block says plainly what it wants.
+		if strings.EqualFold(string(cap), "capability") {
+			if c, a, ok := splitLabelled(arg); ok {
+				cap, arg = c, a
+			}
+		}
+
 		if cap == "" || arg == "" {
 			continue
 		}
@@ -154,7 +275,7 @@ func Execute(ctx context.Context, workspace string, reg *Registry, req Request) 
 	res := Result{Request: req}
 
 	if !reg.permits(req.Cap) {
-		res.Output = fmt.Sprintf("REFUSED: capability %q is not permitted in this phase", req.Cap)
+		res.Output = refusal(reg, req.Cap)
 		return res
 	}
 	res.Allowed = true
@@ -209,6 +330,28 @@ func Execute(ctx context.Context, workspace string, reg *Registry, req Request) 
 			res.Images = append(res.Images, img)
 			res.Output = fmt.Sprintf("(image attached: %s, %s, %d bytes)", req.Arg, img.MediaType, len(img.Data))
 		}
+	case LSPDefinition:
+		if reg.LSP == nil {
+			res.Output, res.Err = "", errNoLSP
+			break
+		}
+		path, line, char, err := parseLSPTarget(workspace, req.Arg)
+		if err != nil {
+			res.Err = err
+			break
+		}
+		res.Output, res.Err = reg.LSP.Definition(ctx, path, line, char)
+	case LSPReferences:
+		if reg.LSP == nil {
+			res.Output, res.Err = "", errNoLSP
+			break
+		}
+		path, line, char, err := parseLSPTarget(workspace, req.Arg)
+		if err != nil {
+			res.Err = err
+			break
+		}
+		res.Output, res.Err = reg.LSP.References(ctx, path, line, char)
 	case CmdRun:
 		res.Output, res.Err = runDeclared(ctx, workspace, reg, req.Arg)
 	default:
@@ -262,6 +405,59 @@ func parseMCPCall(arg string) (name string, args map[string]any, err error) {
 	return name, args, nil
 }
 
+var (
+	errNoLSP  = errors.New("no language server is available for this project")
+	errLSPArg = errors.New(`expected "<file>:<line>:<char>", with 0-indexed line and character`)
+)
+
+// parseLSPTarget reads "<file>:<line>:<char>" and resolves the file against
+// the workspace.
+//
+// It returns the resolved path rather than the raw one so that containment
+// cannot be forgotten at a call site: every other filesystem capability goes
+// through SafeRelPath, and an argument that leaves the workspace is refused
+// here for the same reason.
+func parseLSPTarget(workspace, arg string) (path string, line, char int, err error) {
+	// The position is the last two fields, so the file may contain a colon.
+	charAt := strings.LastIndex(arg, ":")
+	if charAt < 0 {
+		return "", 0, 0, errLSPArg
+	}
+	lineAt := strings.LastIndex(arg[:charAt], ":")
+	if lineAt < 0 {
+		return "", 0, 0, errLSPArg
+	}
+
+	// A position that is not a number is a malformed request, not position
+	// zero: answering about line 0 would look like an answer.
+	if char, err = strconv.Atoi(arg[charAt+1:]); err != nil {
+		return "", 0, 0, fmt.Errorf("%w: %q is not a character", errLSPArg, arg[charAt+1:])
+	}
+	if line, err = strconv.Atoi(arg[lineAt+1 : charAt]); err != nil {
+		return "", 0, 0, fmt.Errorf("%w: %q is not a line", errLSPArg, arg[lineAt+1:charAt])
+	}
+
+	rel, err := patch.SafeRelPath(workspace, arg[:lineAt])
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return filepath.Join(workspace, rel), line, char, nil
+}
+
+// splitLabelled reads the "capability: X / argument: Y" shape, given what
+// followed the first colon.
+func splitLabelled(rest string) (Capability, string, bool) {
+	name, after, found := strings.Cut(rest, "\n")
+	if !found {
+		return "", "", false
+	}
+	label, value, ok := strings.Cut(after, ":")
+	if !ok || !strings.EqualFold(strings.TrimSpace(label), "argument") {
+		return "", "", false
+	}
+	return Capability(strings.TrimSpace(name)), strings.TrimSpace(value), true
+}
+
 // splitGrepArg accepts "<regexp>" or "<regexp> -- <glob>".
 func splitGrepArg(arg string) (pattern, glob string) {
 	if i := strings.Index(arg, " -- "); i != -1 {
@@ -284,7 +480,7 @@ func readFile(workspace, arg string, max int) (string, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(workspace, rel))
 	if err != nil {
-		return "", err
+		return "", readError(rel, err)
 	}
 	if len(data) > max {
 		return string(data[:max]) + "\n... (truncated)", nil
@@ -342,20 +538,24 @@ func declaredNames(reg *Registry) []string {
 
 // Protocol is the instruction block appended to an agent's system prompt so it
 // knows the tools exist and what it may do with them.
-func Protocol(reg *Registry) string {
+func Protocol(reg *Registry, workspace string) string {
+	var granted []Capability
 	var allowed []string
 	for _, c := range All {
 		if reg.permits(c) {
+			granted = append(granted, c)
 			allowed = append(allowed, string(c))
 		}
 	}
-	if len(allowed) == 0 {
+	if len(granted) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("\n\nYou can inspect the real project instead of guessing. To do so, emit:\n")
-	b.WriteString("<<TOOL>>\n<capability>: <argument>\n<<END>>\n\n")
+	b.WriteString("<<TOOL>>\n" + string(granted[0]) + ": " + exampleArg(granted[0], workspace) + "\n<<END>>\n\n")
+	b.WriteString("One block is one line: the capability name, a colon, and its argument.\n")
+	b.WriteString("The words \"capability\" and \"argument\" are not part of it.\n\n")
 	b.WriteString("Capabilities available to you in this phase: " + strings.Join(allowed, ", ") + "\n\n")
 	if reg.permits(FSGrep) {
 		b.WriteString("fs.grep takes a Go regular expression, optionally narrowed with \" -- <glob>\".\n")

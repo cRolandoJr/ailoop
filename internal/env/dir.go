@@ -31,6 +31,17 @@ func AILoopDir(workspace string) string {
 	return filepath.Join(workspace, root, branchesIn, branch)
 }
 
+// RootDir returns the loop's directory for this workspace, the one that is
+// not per-branch. Things shared by every line of work live here.
+func RootDir(workspace string) string {
+	return filepath.Join(workspace, root)
+}
+
+// SandboxDir returns the directory used for the isolated git worktree for this branch.
+func SandboxDir(workspace string) string {
+	return filepath.Join(AILoopDir(workspace), "sandbox")
+}
+
 // currentBranch returns the checked-out branch, sanitised for use as a
 // directory name, or "" when there is none (no repository, or detached HEAD -
 // which is what a throwaway worktree looks like).

@@ -114,25 +114,45 @@ type pendingWrite struct {
 // rest while writing is what let a patch half-land: blocks one and two were
 // already on disk when block three turned out to have an ambiguous search.
 // "All or nothing" is only true if every check runs before the first write.
+// planWrites is plan read as all-or-nothing: applying a patch is one
+// operation, so the first refusal refuses it whole.
 func planWrites(workspace string, blocks []Block, seen Seen) ([]pendingWrite, error) {
+	writes, problems := plan(workspace, blocks, seen)
+	if len(problems) > 0 {
+		p := problems[0]
+		return nil, fmt.Errorf("refusing patch to %s: %w", p.File, p.Err)
+	}
+	return writes, nil
+}
+
+// plan works out what these blocks would write, and what is wrong with each
+// one that cannot be applied. It touches nothing on disk.
+//
+// One implementation, two readings: planWrites stops at the first problem
+// because a patch applies whole, and DryRun reports them all because the
+// review is per block. A dry run that disagreed with the real apply would be
+// worse than none.
+func plan(workspace string, blocks []Block, seen Seen) ([]pendingWrite, []Problem) {
 	// Several blocks may target the same file. They apply in order, each on
 	// the result of the previous one, which is what they would have done when
 	// writing was interleaved.
 	pending := map[string]*pendingWrite{}
 	var order []string
+	var problems []Problem
 
-	for i := range blocks {
-		rel, err := SafeRelPath(workspace, blocks[i].FilePath)
+	// b is a copy: the same slice travels on to the review and to the real
+	// apply, so planning must not leave a mark on it.
+	for i, b := range blocks {
+		rel, err := SafeRelPath(workspace, b.FilePath)
 		if err != nil {
-			return nil, fmt.Errorf("refusing patch: %w", err)
+			problems = append(problems, Problem{Index: i, File: b.FilePath, Err: err})
+			continue
 		}
-		blocks[i].FilePath = rel
-		full := filepath.Join(workspace, rel)
 
 		w, known := pending[rel]
 		if !known {
-			w = &pendingWrite{rel: rel, full: full}
-			data, readErr := os.ReadFile(full)
+			w = &pendingWrite{rel: rel, full: filepath.Join(workspace, rel)}
+			data, readErr := os.ReadFile(w.full)
 			switch {
 			case readErr == nil:
 				w.content = string(data)
@@ -140,22 +160,26 @@ func planWrites(workspace string, blocks []Block, seen Seen) ([]pendingWrite, er
 				// seen means the agent read nothing, and then no patch to an
 				// existing file is legitimate.
 				if seen != nil && !seen.Has(rel) {
-					return nil, unreadError(rel, seen)
+					problems = append(problems, Problem{Index: i, File: b.FilePath,
+						Err: unreadError(rel, seen)})
+					continue
 				}
 			case os.IsNotExist(readErr):
 				// A file that does not exist could not have been read, so the
 				// read check does not apply: this is a creation.
 				w.create = true
 			default:
-				return nil, fmt.Errorf("could not read %s: %w", rel, readErr)
+				problems = append(problems, Problem{Index: i, File: b.FilePath, Err: readErr})
+				continue
 			}
 			pending[rel] = w
 			order = append(order, rel)
 		}
 
-		next, err := applyTo(w, blocks[i])
+		next, err := applyTo(w, b)
 		if err != nil {
-			return nil, fmt.Errorf("refusing patch to %s: %w", rel, err)
+			problems = append(problems, Problem{Index: i, File: b.FilePath, Err: err})
+			continue
 		}
 		w.content = next
 	}
@@ -164,7 +188,7 @@ func planWrites(workspace string, blocks []Block, seen Seen) ([]pendingWrite, er
 	for _, rel := range order {
 		out = append(out, *pending[rel])
 	}
-	return out, nil
+	return out, problems
 }
 
 // applyTo computes the content of one file after one block, or explains why

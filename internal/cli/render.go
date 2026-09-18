@@ -18,6 +18,9 @@ import (
 
 func Error(err error) {
 	pterm.Error.Printf("%v\n", err)
+	if hint := ShellHint(err); hint != "" {
+		pterm.Info.Println(hint)
+	}
 }
 
 func Status(r *app.StatusReport) {

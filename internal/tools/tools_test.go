@@ -100,7 +100,7 @@ func TestCmdRunSoloCorreLoDeclarado(t *testing.T) {
 
 func TestProtocolNoOfreceLoQueNoPermite(t *testing.T) {
 	reg := &Registry{Allowed: map[Capability]bool{FSRead: true}}
-	p := Protocol(reg)
+	p := Protocol(reg, t.TempDir())
 	if !strings.Contains(p, "fs.read") {
 		t.Errorf("el protocolo no menciona la capacidad permitida")
 	}
@@ -110,7 +110,7 @@ func TestProtocolNoOfreceLoQueNoPermite(t *testing.T) {
 }
 
 func TestProtocolVacioSinCapacidades(t *testing.T) {
-	if p := Protocol(&Registry{}); p != "" {
+	if p := Protocol(&Registry{}, t.TempDir()); p != "" {
 		t.Errorf("genero protocolo sin capacidades: %q", p)
 	}
 }

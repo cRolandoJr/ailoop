@@ -138,7 +138,7 @@ func (l *Loop) Capabilities() (*CapabilitiesReport, error) {
 	r := &CapabilitiesReport{Model: caps}
 
 	for _, ph := range state.Phases() {
-		reg := agents.RegistryFor(ph, l.declaredCommands(), caps, l.pool, nil)
+		reg := agents.RegistryFor(ph, l.declaredCommands(), caps, l.pool, nil, l.lspClient)
 		g := PhaseGrants{Phase: ph}
 		for _, c := range tools.All {
 			if reg.Allowed[c] {

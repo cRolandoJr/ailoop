@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,8 +18,13 @@ import (
 	"github.com/cRolandoJr/ailoop/internal/config"
 	"github.com/cRolandoJr/ailoop/internal/env"
 	"github.com/cRolandoJr/ailoop/internal/host"
+	"github.com/cRolandoJr/ailoop/internal/ide"
 	"github.com/cRolandoJr/ailoop/internal/llm"
+	"github.com/cRolandoJr/ailoop/internal/lsp"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
+	"syscall"
+
+	"github.com/cRolandoJr/ailoop/internal/repl"
 	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/pterm/pterm"
 )
@@ -31,6 +39,27 @@ func main() {
 // os.Exit does not run deferred functions, and one of those closes the MCP
 // server processes: exiting from a case left them running. It also lets the
 // dashboard invoke a command without main calling itself.
+// interruptible returns a context cancelled by Ctrl-C.
+//
+// Intercepting the signal instead of letting it kill the process is what
+// makes an abandoned run keep its receipt. Cancellation travels out through
+// the same error path a network failure takes, and that path already
+// persists the ledger - so nothing here needs to know how state is saved. A
+// signal handler that saved on its own would have been a second copy of that
+// logic, free to drift from the first.
+//
+// The returned stop is also armed on the first signal, which restores default
+// handling: a run that does not react to cancellation must stay killable from
+// the keyboard, so the second Ctrl-C ends the process the usual way.
+func interruptible() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
+}
+
 func run(args []string) int {
 	cwd, _ := os.Getwd()
 
@@ -44,7 +73,7 @@ func run(args []string) int {
 	}
 
 	if len(args) < 2 {
-		return runDashboard(cwd)
+		return runSession(cwd)
 	}
 
 	command := args[1]
@@ -54,6 +83,7 @@ func run(args []string) int {
 		startCmd := flag.NewFlagSet("start", flag.ExitOnError)
 		budgetUSD := startCmd.Float64("budget", 0, "abort the work item above this estimated cost in USD (needs prices in the config)")
 		budgetTok := startCmd.Int("max-tokens", 0, "abort the work item above this many tokens")
+		force := startCmd.Bool("force", false, "discard the work item already in this directory")
 		if err := startCmd.Parse(args[2:]); err != nil {
 			cli.Error(err)
 			return 1
@@ -67,6 +97,16 @@ func run(args []string) int {
 			return 1
 		}
 		task := args[2]
+
+		// Starting used to save a fresh state over whatever was there, without
+		// a word. An approved spec, a ledger and a history of rejected
+		// proposals disappeared on a mistyped command.
+		if prev, err := state.Load(cwd); err == nil && prev.HasWork() && !*force {
+			pterm.Error.Printfln("There is already work here: %s (%s)", prev.TaskDescription, prev.CurrentPhase)
+			pterm.Info.Println("Starting over would discard it. Use --force if that is what you want.")
+			return 1
+		}
+
 		s := state.NewState(task)
 
 		// The project's ceiling by default; the flags lower it for this run.
@@ -101,6 +141,16 @@ func run(args []string) int {
 			}
 		}
 
+		// Fail here, not on the first next. A ceiling that cannot be evaluated
+		// is a setting the person has to fix, and finding out one command
+		// later means they created a work item they cannot run.
+		if s.Budget.MaxUSD > 0 && !s.Budget.Priced() {
+			cli.Error(fmt.Errorf(
+				"a USD ceiling of %.2f needs prices: add price_in_per_mtok and "+
+					"price_out_per_mtok under \"budget\" in %s, or use --max-tokens",
+				s.Budget.MaxUSD, config.Path(cwd)))
+			return 1
+		}
 		if s.Budget.Set() {
 			pterm.Info.Printf("Budget: %s\n", s.Budget.Remaining(&s.Spend))
 		}
@@ -116,12 +166,15 @@ func run(args []string) int {
 			return 1
 		}
 
-		ctx := context.Background()
+		ctx, stopSignals := interruptible()
+		defer stopSignals()
 		loop, pool, err := buildLoop(ctx, cwd)
 		if err != nil {
 			cli.Error(err)
 			return 1
 		}
+		// The loop owns the language server it started.
+		defer loop.Close()
 		if pool != nil {
 			defer pool.Close()
 		}
@@ -158,12 +211,15 @@ func run(args []string) int {
 		cli.Outcome(out, ledger)
 
 	case "watch":
-		ctx := context.Background()
+		ctx, stopSignals := interruptible()
+		defer stopSignals()
 		loop, pool, err := buildLoop(ctx, cwd)
 		if err != nil {
 			cli.Error(err)
 			return 1
 		}
+		// The loop owns the language server it started.
+		defer loop.Close()
 		if pool != nil {
 			defer pool.Close()
 		}
@@ -243,7 +299,21 @@ func run(args []string) int {
 		cli.Doctor(host.Discover())
 
 	case "capabilities":
-		r, err := newLoop(cwd, getLLMClient()).Capabilities()
+		// Built with the real external tools attached, not the cheap loop:
+		// the whole point of this command is what IS granted here, and a loop
+		// assembled without the MCP pool and the language server reports them
+		// as absent whether they are or not.
+		loop, pool, err := buildLoop(context.Background(), cwd)
+		if err != nil {
+			cli.Error(err)
+			return 1
+		}
+		// The loop owns the language server it started.
+		defer loop.Close()
+		if pool != nil {
+			defer pool.Close()
+		}
+		r, err := loop.Capabilities()
 		if err != nil {
 			cli.Error(err)
 			return 1
@@ -288,6 +358,8 @@ func run(args []string) int {
 			cli.Error(err)
 			return 1
 		}
+		// The loop owns the language server it started.
+		defer loop.Close()
 		if pool != nil {
 			defer pool.Close()
 		}
@@ -310,9 +382,47 @@ func run(args []string) int {
 	return 0
 }
 
+// defaultGeminiModel is what runs when GEMINI_MODEL is unset.
+//
+// It is a measured choice, not a guess: the 2.5 family now answers 404 for
+// new keys, 3.6 through 3.8 answered 503, and this one and
+// gemini-3.1-flash-lite were the two that actually responded. A default
+// pointing at a retired model fails with a 404 that says nothing about the
+// real cause.
+const defaultGeminiModel = "gemini-3.5-flash"
+
+// responseHeaderTimeout bounds the wait for the provider's FIRST byte.
+//
+// Measured on this project's free Gemini tier: one request in three took 68
+// seconds to first byte while the others took under 10. A ceiling anywhere
+// near the median turns ordinary tail latency into a failed run.
+const responseHeaderTimeout = 180 * time.Second
+
+// httpClient builds the transport used by the hand-written adapters.
+//
+// It deliberately leaves http.Client.Timeout unset. That field bounds the
+// whole exchange INCLUDING reading the body, so on a streaming response it
+// cuts off an answer that is arriving correctly - the longer the useful
+// output, the likelier it is killed. What actually needs a ceiling is the
+// wait for a provider that never answers, and that is a different clock:
+// ResponseHeaderTimeout. Cancellation of a healthy-but-long stream stays with
+// the context the caller already passes.
+//
+// The transport is cloned from the default so proxy handling, dialing and
+// HTTP/2 keep working; building an http.Transport from scratch silently drops
+// all three.
+func httpClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Transport: tr}
+}
+
 func getLLMClient() llm.Client {
 	// Anthropic first: it is the only adapter here that reports vision and
-	// thinking as established rather than unknown.
+	// thinking as established rather than unknown. It is also the only one
+	// not wrapped in WithRetry - the official SDK classifies and retries on
+	// its own, and two stacked policies multiply the wait without improving
+	// the odds.
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		return llm.NewClaudeClient(key, os.Getenv("ANTHROPIC_MODEL"))
 	}
@@ -321,13 +431,13 @@ func getLLMClient() llm.Client {
 	if geminiKey != "" {
 		geminiModel := os.Getenv("GEMINI_MODEL")
 		if geminiModel == "" {
-			geminiModel = "gemini-1.5-pro"
+			geminiModel = defaultGeminiModel
 		}
-		return &llm.GeminiClient{
+		return llm.WithRetry(&llm.GeminiClient{
 			APIKey: geminiKey,
 			Model:  geminiModel,
-			HTTP:   &http.Client{Timeout: 60 * time.Second},
-		}
+			HTTP:   httpClient(),
+		}, llm.DefaultAttempts)
 	}
 
 	baseURL := os.Getenv("OPENAI_BASE_URL")
@@ -341,12 +451,12 @@ func getLLMClient() llm.Client {
 		model = "llama3"
 	}
 
-	return &llm.OpenAIClient{
+	return llm.WithRetry(&llm.OpenAIClient{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
-		HTTP:    &http.Client{Timeout: 60 * time.Second},
-	}
+		HTTP:    httpClient(),
+	}, llm.DefaultAttempts)
 }
 
 func printUsage() {
@@ -380,7 +490,7 @@ func geminiModel() string {
 // commands build their own with the MCP pool and config attached.
 func newLoop(workspace string, client llm.Client) *app.Loop {
 	cfg, _ := config.Load(workspace)
-	return app.NewLoop(workspace, client, nil, cfg)
+	return app.NewLoop(workspace, client, nil, cfg, nil)
 }
 
 // buildLoop is the composition root for the commands that need a model and
@@ -395,6 +505,27 @@ func buildLoop(ctx context.Context, workspace string) (*app.Loop, *mcp.Pool, err
 		cfg = &config.Config{}
 	}
 
+	var lspClient *lsp.Client
+	var lspCmd []string
+	if len(cfg.LSP) > 0 {
+		lspCmd = cfg.LSP
+	} else {
+		if _, err := os.Stat(filepath.Join(workspace, "go.mod")); err == nil {
+			lspCmd = []string{"gopls"}
+		}
+	}
+	if len(lspCmd) > 0 {
+		client, err := lsp.Start(ctx, lspCmd[0], lspCmd[1:]...)
+		if err == nil {
+			if err := client.Initialize(ctx, workspace); err != nil {
+				pterm.Warning.Printf("LSP %v did not initialize: %v\n", lspCmd, err)
+			}
+			lspClient = client
+		} else {
+			pterm.Warning.Printf("Could not start LSP %v: %v\n", lspCmd, err)
+		}
+	}
+
 	var pool *mcp.Pool
 	if len(cfg.MCP) > 0 {
 		pool = mcp.Open(ctx, cfg.MCP)
@@ -406,64 +537,142 @@ func buildLoop(ctx context.Context, workspace string) (*app.Loop, *mcp.Pool, err
 		}
 	}
 
-	return app.NewLoop(workspace, getLLMClient(), pool, cfg), pool, nil
+	return app.NewLoop(workspace, getLLMClient(), pool, cfg, lspClient), pool, nil
 }
 
-// runDashboard is what "ailoop" with no arguments shows: where the work is,
-// and what can be done next, instead of a wall of usage text.
-func runDashboard(cwd string) int {
-	pterm.DefaultHeader.WithFullWidth().Println("AI Loop CLI")
+// runSession is what "ailoop" with no arguments opens: one process, one MCP
+// pool, and a prompt that takes plain text.
+//
+// It replaced a menu of fixed options. A menu can only offer what it lists,
+// so the thing a person most often wants to say - "no, because X" - had
+// nowhere to go until a rejection prompt happened to appear. Typing is the
+// general case; the menu was the special one.
+//
+// State is deliberately NOT held in this loop. It is re-read from disk each
+// turn, exactly as the one-shot commands do, so the session is a way to reach
+// the work rather than the place the work lives: close the terminal and
+// nothing is lost.
+func runSession(cwd string) int {
+	ctx, stopSignals := interruptible()
+	defer stopSignals()
 
+	loop, pool, err := buildLoop(ctx, cwd)
+	if err != nil {
+		cli.Error(err)
+		return 1
+	}
+	// The loop owns the language server it started.
+	defer loop.Close()
+	if pool != nil {
+		// Opened once for the whole session. The one-shot commands pay this
+		// cost on every invocation; here it is paid once and reused.
+		defer pool.Close()
+	}
+	// Only a process that stays alive can receive editor state. A one-shot
+	// command would start a server, do its work and exit before a plugin
+	// could reach it; it still READS what a session left on disk.
+	if err := ide.StartSyncServer(cwd); err != nil {
+		pterm.Warning.Println(err)
+	}
+
+	pterm.DefaultHeader.WithFullWidth().Println("AI Loop")
+	pterm.Info.Println("Type to talk to the agent. /help for commands, /exit to leave.")
+	fmt.Println()
+
+	in := bufio.NewScanner(os.Stdin)
 	for {
-		status := "not initialized - run 'ailoop start'"
-		if s, err := state.Load(cwd); err == nil {
-			status = fmt.Sprintf("%s (v%d)", s.CurrentPhase, s.CurrentVersion())
-			if _, total := s.Spend.Total(); total.Total() > 0 {
-				mark := ""
-				if total.Estimated {
-					mark = " est."
-				}
-				status += fmt.Sprintf("  -  %d in / %d out tokens%s",
-					total.InputTokens, total.OutputTokens, mark)
-			}
-		}
-		pterm.Info.Printf("Current state: %s\n\n", status)
+		s, loadErr := state.Load(cwd)
+		cli.SessionPrompt(s)
 
-		const (
-			optNext   = "Advance (next)"
-			optWatch  = "Watch (autonomous TDD)"
-			optStatus = "Status"
-			optCost   = "Cost"
-			optDecs   = "Decisions"
-			optUndo   = "Undo"
-			optExit   = "Exit"
-		)
-		selected, _ := pterm.DefaultInteractiveSelect.
-			WithOptions([]string{optNext, optWatch, optStatus, optCost, optDecs, optUndo, optExit}).
-			Show("Select action")
-		fmt.Println()
-
-		// Each option runs the command through run(), not through main(): a
-		// dashboard that called main() would recurse, and any os.Exit inside
-		// would skip the deferred cleanup of the MCP servers.
-		switch selected {
-		case optNext:
-			return run([]string{"ailoop", "next"})
-		case optWatch:
-			return run([]string{"ailoop", "watch"})
-		case optExit:
+		if !in.Scan() {
+			// EOF: Ctrl-D, or stdin was never a terminal.
+			fmt.Println()
 			return 0
-		case optStatus:
-			run([]string{"ailoop", "status"})
-		case optCost:
-			run([]string{"ailoop", "cost"})
-		case optDecs:
-			run([]string{"ailoop", "decisions"})
-		case optUndo:
-			run([]string{"ailoop", "undo"})
 		}
-		// The read-only actions come back to the menu instead of exiting,
-		// which is what you want when you are looking around.
+
+		switch intent := repl.Interpret(in.Text(), loadErr == nil); intent.Kind {
+		case repl.KindExit:
+			return 0
+
+		case repl.KindNothing:
+			pterm.Info.Println("Describe the work you want to start, or /help.")
+
+		case repl.KindStart:
+			run([]string{"ailoop", "start", intent.Text})
+
+		case repl.KindAdvance:
+			sessionAdvance(ctx, loop, cwd, intent.Text, in)
+
+		case repl.KindNeedsWork:
+			pterm.Info.Printfln("/%s needs a work item. Describe the task and press Enter to begin.", intent.Text)
+
+		case repl.KindCommand:
+			runSessionCommand(intent)
+		}
 		fmt.Println()
 	}
+}
+
+// runSessionCommand handles a slash command.
+func runSessionCommand(intent repl.Intent) {
+	if intent.Text == "help" {
+		cli.SessionHelp(repl.Catalog())
+		return
+	}
+	cmd, known := repl.Command(intent.Text)
+	if !known {
+		pterm.Warning.Printf("Unknown command %q. /help lists them.\n", intent.Text)
+		return
+	}
+	argv := []string{"ailoop", cmd}
+	if intent.Args != "" {
+		argv = append(argv, strings.Fields(intent.Args)...)
+	}
+	run(argv)
+}
+
+// sessionAdvance runs one phase, carrying the person's text as feedback.
+//
+// The feedback is written to the state before the phase runs because that is
+// where the agent reads it, and where @references are expanded. Routing it
+// anywhere else would have been a second mechanism for the same thing.
+func sessionAdvance(ctx context.Context, loop *app.Loop, cwd, feedback string, in *bufio.Scanner) {
+	if feedback != "" {
+		s, err := state.Load(cwd)
+		if err != nil {
+			cli.Error(err)
+			return
+		}
+		s.Feedback = feedback
+		if err := state.Save(cwd, s); err != nil {
+			cli.Error(err)
+			return
+		}
+	}
+
+	pc, err := loop.BuildProjectContext(nil, false)
+	if err != nil {
+		cli.Error(err)
+		return
+	}
+	cli.ProjectContext(pc)
+
+	out, err := loop.Advance(ctx, app.AdvanceOptions{
+		ProjectContext: pc.Text,
+		Review:         cli.SessionReview(in),
+		OnTool:         cli.ToolUsed,
+		OnProgress:     cli.Progress,
+	})
+	if err != nil {
+		var ge *app.GuardError
+		if errors.As(err, &ge) {
+			cli.GuardRefusal(ge)
+		} else {
+			cli.Error(err)
+		}
+		return
+	}
+
+	ledger, _, _ := loop.Cost()
+	cli.Outcome(out, ledger)
 }

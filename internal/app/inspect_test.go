@@ -31,7 +31,7 @@ func loopCon(t *testing.T, s *state.AIState, client llm.Client) *Loop {
 			t.Fatal(err)
 		}
 	}
-	return NewLoop(dir, client, nil, nil)
+	return NewLoop(dir, client, nil, nil, nil)
 }
 
 func TestStatusDistingueProducidoDeAprobado(t *testing.T) {
@@ -69,7 +69,7 @@ func TestStatusDistingueProducidoDeAprobado(t *testing.T) {
 
 func TestSinLoopIniciadoSeAvisaEnVezDeExplotar(t *testing.T) {
 	// Antes esto era un os.Exit(1) dentro del case: imposible de verificar.
-	_, err := NewLoop(t.TempDir(), nil, nil, nil).Status()
+	_, err := NewLoop(t.TempDir(), nil, nil, nil, nil).Status()
 	if err == nil {
 		t.Fatal("no aviso que no hay loop iniciado")
 	}

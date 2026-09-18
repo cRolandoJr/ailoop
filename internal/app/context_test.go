@@ -19,7 +19,7 @@ func loopEn(t *testing.T, archivos map[string]string) *Loop {
 			t.Fatal(err)
 		}
 	}
-	return NewLoop(dir, nil, nil, nil)
+	return NewLoop(dir, nil, nil, nil, nil)
 }
 
 func TestPorDefectoSeNombranLosArchivosNoSePegan(t *testing.T) {

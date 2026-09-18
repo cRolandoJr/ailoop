@@ -83,3 +83,19 @@ func TestRemainingNoMienteSobreLoQueNoPuedeEvaluar(t *testing.T) {
 		t.Errorf("Remaining = %q, quiero que diga que no se puede aplicar", got)
 	}
 }
+
+func TestUnTechoNoAplicableSeDetectaAntesDeUsarlo(t *testing.T) {
+	// Priced() es lo que 'start' consulta para frenar ahi en vez de en el
+	// primer next: descubrirlo un comando despues significa haber creado un
+	// trabajo que no se puede correr.
+	if (Budget{MaxUSD: 0.25}).Priced() {
+		t.Error("un techo sin precios se reporta como aplicable")
+	}
+	if !(Budget{MaxUSD: 0.25, PriceInPerMTok: 5}).Priced() {
+		t.Error("con precio de entrada deberia ser aplicable")
+	}
+	// Un techo en tokens no necesita precios.
+	if err := (Budget{MaxTokens: 1000}).Check(ledgerCon(10, 10)); err != nil {
+		t.Errorf("un techo en tokens exigio precios: %v", err)
+	}
+}

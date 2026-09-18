@@ -47,6 +47,10 @@ type PhaseInput struct {
 	Pool         *mcp.Pool
 	Fetcher      *web.Fetcher
 	Observe      ToolObserver
+	LSP          interface {
+		Definition(ctx context.Context, path string, line, char int) (string, error)
+		References(ctx context.Context, path string, line, char int) (string, error)
+	}
 }
 
 // RunPhase executes the agent of the current phase.
@@ -73,8 +77,8 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			return Research(ctx, question, client, fetcher, observe)
 		}
 	}
-	reg := RegistryFor(s.CurrentPhase, declaredCmds, client.Describe(), pool, research)
-	sysPrompt += tools.Protocol(reg)
+	reg := RegistryFor(s.CurrentPhase, declaredCmds, client.Describe(), pool, research, in.LSP)
+	sysPrompt += tools.Protocol(reg, workspace)
 
 	// Build the context for the LLM based on current state
 	contextMsg := fmt.Sprintf("Task: %s\n", s.TaskDescription)
@@ -99,8 +103,8 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 		contextMsg += fmt.Sprintf("\n<PROJECT_CONTEXT>\n%s\n</PROJECT_CONTEXT>\n", projectContext)
 	}
 
-	if s.RejectionReason != "" {
-		contextMsg += fmt.Sprintf("\nWARNING: Your previous proposal was REJECTED by the user for the following reason:\n\"%s\"\nPlease fix the divergence and propose version %d.\n", s.RejectionReason, getCurrentVersion(s))
+	if s.Feedback != "" {
+		contextMsg += fmt.Sprintf("\nWARNING: Your previous proposal was REJECTED by the user for the following reason:\n\"%s\"\nPlease fix the divergence and propose version %d.\n", s.Feedback, getCurrentVersion(s))
 	}
 
 	messages := []llm.Message{
@@ -112,6 +116,11 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			Round:   -1,
 		},
 	}
+
+	// What has already been asked, and in which round. A phase has seven
+	// rounds; measured, an agent spent four of them asking for the same
+	// missing file, because the answer never said it was the same answer.
+	askedIn := map[string]int{}
 
 	// Tool loop: generate, honour any inspection the agent asked for, feed the
 	// real answers back, and let it decide again.
@@ -173,7 +182,13 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			if err := s.Budget.Check(&s.Spend); err != nil {
 				return "", err
 			}
-			last, err := client.Generate(ctx, messages)
+			// Streamed like every other round: this is the one that carries
+			// the answer, and it used to be the only one the person could not
+			// watch arrive.
+			last, err := client.GenerateStream(ctx, messages, func(chunk string) {
+				fmt.Print(chunk)
+			})
+			fmt.Println()
 			if err != nil {
 				return "", err
 			}
@@ -190,7 +205,20 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 				observe(res)
 			}
 			images = append(images, res.Images...)
-			fmt.Fprintf(&observations, "<<RESULT %s: %s>>\n%s\n<<END RESULT>>\n\n", req.Cap, req.Arg, res.Output)
+
+			key := string(req.Cap) + "\x00" + req.Arg
+			note := ""
+			if before, repeated := askedIn[key]; repeated {
+				// The answer has not changed and will not: nothing between
+				// two rounds of the same conversation touched the workspace.
+				note = fmt.Sprintf("You already asked for this in round %d and this is the same answer. "+
+					"Asking again spends a round and changes nothing; do something else or answer now.\n", before+1)
+			} else {
+				askedIn[key] = round
+			}
+
+			fmt.Fprintf(&observations, "<<RESULT %s: %s>>\n%s%s\n<<END RESULT>>\n\n",
+				req.Cap, req.Arg, note, res.Output)
 		}
 
 		messages = append(messages,

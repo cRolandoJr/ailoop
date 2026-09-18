@@ -7,6 +7,8 @@ import (
 
 	"github.com/cRolandoJr/ailoop/internal/agents"
 	"github.com/cRolandoJr/ailoop/internal/attach"
+	"github.com/cRolandoJr/ailoop/internal/env"
+	"github.com/cRolandoJr/ailoop/internal/ide"
 	"github.com/cRolandoJr/ailoop/internal/patch"
 	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/cRolandoJr/ailoop/internal/tools"
@@ -16,6 +18,11 @@ import (
 // tests cannot pass keeps burning tokens forever.
 const MaxAutoFixes = 3
 
+// MaxSandboxFixes bounds the pre-review sandbox loop. It is a separate budget
+// from MaxAutoFixes because they are separate loops: one repairs before the
+// person has looked, the other after the project's checks refused DONE.
+const MaxSandboxFixes = 3
+
 // ReviewRequest is a proposal put in front of the human.
 type ReviewRequest struct {
 	Phase    state.Phase
@@ -24,6 +31,9 @@ type ReviewRequest struct {
 	// Blocks are the patches the proposal contains, if any. Empty for the
 	// phases that produce prose.
 	Blocks []patch.Block
+	// Problems are the blocks that would be refused, worked out without
+	// writing anything. Empty when every block applies cleanly.
+	Problems []patch.Problem
 }
 
 // ReviewDecision is what the human answered.
@@ -96,6 +106,22 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 
 	out := &AdvanceOutcome{From: s.CurrentPhase}
 
+	// Whatever this run spent is already paid for, so it reaches disk on every
+	// exit - including the ones that return an error.
+	//
+	// The distinction being drawn is between an irreversible effect and a
+	// transactional result. A half-written spec must not survive a failed
+	// phase, and does not: documents are only recorded once a phase completes.
+	// But the ledger is not a result, it is a receipt. Saving it only on the
+	// happy path is what let one network timeout erase two rounds of tokens
+	// the provider had already billed, leaving the budget ceiling reading zero
+	// on the next run.
+	defer func() {
+		if err := l.save(s); err != nil {
+			opts.progress("state", "could not save state: "+err.Error())
+		}
+	}()
+
 	// One resolver for the whole turn: discovering the host's tools is a
 	// handful of PATH lookups, and doing it per reference would repeat them.
 	resolver := attach.New(l.workspace)
@@ -124,11 +150,52 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 		}
 
 		blocks, _ := patch.ParseBlocks(proposal)
+
+		if s.CurrentPhase == state.PhaseImplementation && len(blocks) > 0 {
+			// Try the patches somewhere that is not the person's tree, and let
+			// the project's own checks say whether they hold up.
+			sandboxDir := env.SandboxDir(l.workspace)
+			switch err := prepareSandbox(l.workspace, sandboxDir); {
+			case err != nil:
+				opts.progress("sandbox", err.Error())
+			default:
+				if err := patch.ApplyBlocks(sandboxDir, blocks, l.seen(s)); err != nil {
+					// The sandbox is a checkout of HEAD, so a SEARCH written
+					// against uncommitted work will not match here. Saying so
+					// beats skipping the whole thing without a word.
+					opts.progress("sandbox", "patches do not apply to a clean checkout of HEAD: "+err.Error())
+					break
+				}
+				report, verr := l.VerifyDir(ctx, sandboxDir)
+				switch {
+				case verr != nil:
+					opts.progress("sandbox", verr.Error())
+				case report.Passed:
+					s.SandboxRetries = 0
+				case s.SandboxRetries < MaxSandboxFixes:
+					s.SandboxRetries++
+					opts.progress("sandbox-fix", fmt.Sprintf("%d/%d", s.SandboxRetries, MaxSandboxFixes))
+					s.Feedback = report.FailureSummary()
+					s.RejectCurrentProposal(proposal, s.Feedback, time.Now())
+					continue
+				}
+			}
+		}
+
+		// The cheapest signal there is: what a patch would refuse, worked out
+		// without writing a byte or running a command. It belongs in front of
+		// the person while they decide, not in an error after they approved.
+		var problems []patch.Problem
+		if len(blocks) > 0 {
+			problems = patch.DryRun(l.workspace, blocks, l.seen(s))
+		}
+
 		decision := opts.Review(ReviewRequest{
 			Phase:    s.CurrentPhase,
 			Version:  s.CurrentVersion(),
 			Proposal: proposal,
 			Blocks:   blocks,
+			Problems: problems,
 		})
 
 		// Patches the human accepted are applied whether or not the whole
@@ -146,14 +213,14 @@ func (l *Loop) Advance(ctx context.Context, opts AdvanceOptions) (*AdvanceOutcom
 			for _, p := range frozenProblems {
 				opts.progress("attachment", p.Error())
 			}
-			s.RejectionReason = reason
+			s.Feedback = reason
 			s.RejectCurrentProposal(proposal, reason, time.Now())
 			out.Rejected = true
 			out.To = s.CurrentPhase
 			return out, l.save(s)
 		}
 
-		s.RejectionReason = ""
+		s.Feedback = ""
 		if err := l.recordApproved(s, proposal, len(blocks) > 0, &opts); err != nil {
 			return nil, err
 		}
@@ -216,11 +283,18 @@ func (e *GuardError) Unwrap() error { return e.Err }
 func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOptions, resolver *attach.Resolver) (string, error) {
 	// @references the person wrote, resolved fresh each turn: a file they
 	// pointed at may have changed since they pointed at it.
-	atts, problems := resolver.Expand(s.TaskDescription + " " + s.RejectionReason)
+	atts, problems := resolver.Expand(s.TaskDescription + " " + s.Feedback)
 	for _, p := range problems {
 		opts.progress("attachment", p.Error())
 	}
 	projectContext := opts.ProjectContext + attach.Render(atts)
+	if s := ide.GetRecentState(l.workspace); s != nil {
+		projectContext += fmt.Sprintf("\n\n<VISUAL_CONTEXT>\nUser is currently looking at file %q around line %d.\n", s.ActiveFile, s.CursorLine)
+		if s.SelectedText != "" {
+			projectContext += fmt.Sprintf("They have selected the following text:\n```\n%s\n```\n", s.SelectedText)
+		}
+		projectContext += "</VISUAL_CONTEXT>\n"
+	}
 
 	run := func() (string, error) {
 		return agents.RunPhase(ctx, agents.PhaseInput{
@@ -233,6 +307,7 @@ func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOption
 			Pool:           l.pool,
 			Fetcher:        l.web(),
 			Observe:        opts.OnTool,
+			LSP:            l.lspClient,
 		})
 	}
 
@@ -272,12 +347,12 @@ func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOption
 		}
 
 		opts.progress("critic-reject", critique.Feedback)
-		s.RejectionReason = critique.Feedback
+		s.Feedback = critique.Feedback
 		if i == maxIterations {
 			opts.progress("critic-exhausted", "presenting best effort")
 		}
 	}
-	s.RejectionReason = ""
+	s.Feedback = ""
 	return proposal, nil
 }
 
@@ -312,7 +387,7 @@ func (l *Loop) rollbackToImplementation(s *state.AIState, failures string) {
 	s.CurrentPhase = state.PhaseImplementation
 	s.ReopenCurrentPhase(now)
 	_, _ = patch.Restore(l.workspace)
-	s.RejectionReason = failures
+	s.Feedback = failures
 }
 
 // seen is the set of files the agent read, as patch expects it.

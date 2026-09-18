@@ -120,7 +120,7 @@ func TestElPrincipalNuncaTieneLaRed(t *testing.T) {
 
 	for _, ph := range state.Phases() {
 		for _, r := range []func(context.Context, string) (string, error){nil, research} {
-			reg := RegistryFor(ph, nil, caps, nil, r)
+			reg := RegistryFor(ph, nil, caps, nil, r, nil)
 			if reg.Allowed[tools.WebFetch] {
 				t.Errorf("%s: el agente principal tiene web.fetch", ph)
 			}
@@ -133,21 +133,21 @@ func TestImplementationNoInvestiga(t *testing.T) {
 	research := func(context.Context, string) (string, error) { return "", nil }
 	caps := llm.Capabilities{}
 
-	reg := RegistryFor(state.PhaseImplementation, nil, caps, nil, research)
+	reg := RegistryFor(state.PhaseImplementation, nil, caps, nil, research, nil)
 	if reg.Allowed[tools.ResearchAsk] {
 		t.Error("IMPLEMENTATION puede investigar, y el contrato 18.10 no se lo da")
 	}
 
 	for _, ph := range []state.Phase{state.PhaseDiscovery, state.PhaseDesign,
 		state.PhasePlan, state.PhaseVerification} {
-		if !RegistryFor(ph, nil, caps, nil, research).Allowed[tools.ResearchAsk] {
+		if !RegistryFor(ph, nil, caps, nil, research, nil).Allowed[tools.ResearchAsk] {
 			t.Errorf("%s no puede investigar, y su contrato si se lo da", ph)
 		}
 	}
 }
 
 func TestSinInvestigadorNoSeOfreceLaDelegacion(t *testing.T) {
-	reg := RegistryFor(state.PhaseDiscovery, nil, llm.Capabilities{}, nil, nil)
+	reg := RegistryFor(state.PhaseDiscovery, nil, llm.Capabilities{}, nil, nil, nil)
 	if reg.Allowed[tools.ResearchAsk] {
 		t.Error("ofrece research.ask sin agente investigador detras")
 	}

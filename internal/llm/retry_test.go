@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/url"
-	"time"
 	"testing"
+	"time"
 )
 
 // fakeClient answers from a scripted list of results, one per call.

@@ -63,7 +63,7 @@ func Research(ctx context.Context, question string, client llm.Client,
 	}
 
 	messages := []llm.Message{
-		{Role: "system", Content: researchPrompt + tools.Protocol(reg), Round: -1},
+		{Role: "system", Content: researchPrompt + tools.Protocol(reg, ""), Round: -1},
 		{Role: "user", Content: "Question: " + question, Round: -1},
 	}
 

@@ -53,7 +53,7 @@ func loopParaAvanzar(t *testing.T, s *state.AIState, checks []verify.Check, m ll
 	if err := config.Save(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	return NewLoop(dir, m, nil, cfg)
+	return NewLoop(dir, m, nil, cfg, nil)
 }
 
 func TestUnRechazoNoAvanzaYGuardaElMotivo(t *testing.T) {
@@ -393,5 +393,65 @@ func TestConPresupuestoDisponibleAvanzaNormal(t *testing.T) {
 	}
 	if !out.Advanced {
 		t.Error("no avanzo")
+	}
+}
+
+// modeloQueGastaYFalla responde una vez pidiendo una herramienta (lo cual
+// consume tokens) y falla en la segunda llamada, que es exactamente la forma
+// en que se cayo la corrida real: dos rondas cobradas y un timeout en la tercera.
+type modeloQueGastaYFalla struct {
+	llamadas int
+}
+
+func (m *modeloQueGastaYFalla) Describe() llm.Capabilities {
+	return llm.Capabilities{Provider: "fake", Model: "gasta-y-falla"}
+}
+
+func (m *modeloQueGastaYFalla) Generate(ctx context.Context, msgs []llm.Message) (llm.Response, error) {
+	return m.GenerateStream(ctx, msgs, func(string) {})
+}
+
+func (m *modeloQueGastaYFalla) GenerateStream(_ context.Context, _ []llm.Message, _ func(string)) (llm.Response, error) {
+	m.llamadas++
+	if m.llamadas == 1 {
+		return llm.Response{
+			Text:  "<<TOOL>>\nfs.list: .\n<<END>>",
+			Usage: llm.Usage{InputTokens: 700, OutputTokens: 300},
+		}, nil
+	}
+	return llm.Response{}, errors.New("context deadline exceeded (Client.Timeout exceeded while awaiting headers)")
+}
+
+func TestElGastoSobreviveAUnaFaseQueFalla(t *testing.T) {
+	// Lo que se gasto ya se pago. Si solo se persiste en el camino feliz, un
+	// corte de red borra del ledger tokens que el proveedor ya cobro y el
+	// techo del presupuesto deja de morder en la corrida siguiente.
+	s := state.NewState("tarea")
+	m := &modeloQueGastaYFalla{}
+	l := loopParaAvanzar(t, s, nil, m)
+
+	_, err := l.Advance(context.Background(), AdvanceOptions{Review: apruebaSiempre})
+	if err == nil {
+		t.Fatal("se esperaba que la fase fallara")
+	}
+
+	// Control positivo: el modelo llego a la segunda llamada, asi que la
+	// primera si cobro. Sin esto, un gasto de cero seria indistinguible de
+	// "nunca se llamo al modelo".
+	if m.llamadas < 2 {
+		t.Fatalf("llamadas = %d: el escenario no se reprodujo", m.llamadas)
+	}
+
+	recargado, err := state.Load(l.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, total := recargado.Spend.Total()
+	if total.Total() == 0 {
+		t.Error("el gasto de la ronda que si se cobro no quedo en disco")
+	}
+	if total.InputTokens != 700 || total.OutputTokens != 300 {
+		t.Errorf("gasto persistido = %d in / %d out, se esperaba 700/300",
+			total.InputTokens, total.OutputTokens)
 	}
 }

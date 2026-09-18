@@ -30,8 +30,18 @@ type AIState struct {
 	Plan            Document `json:"plan"`
 	TestStrategy    Document `json:"test_strategy"`
 	Decisions       Document `json:"decisions"`
-	RejectionReason string   `json:"rejection_reason,omitempty"`
-	AutoRetries     int      `json:"auto_retries,omitempty"`
+	// Feedback is free text the person wrote for the agent: the reason a
+	// proposal was rejected, or an instruction to carry into the next phase.
+	// It was called RejectionReason while rejection was the only way to say
+	// anything; the JSON key keeps that name so state files already on disk
+	// still load.
+	Feedback    string `json:"rejection_reason,omitempty"`
+	AutoRetries int    `json:"auto_retries,omitempty"`
+	// SandboxRetries is the self-repair budget of the pre-review sandbox, kept
+	// apart from AutoRetries on purpose: they are two different loops. One
+	// counter let the sandbox spend the retries the DONE gate needs, and the
+	// loop then stopped at VERIFICATION instead of repairing itself.
+	SandboxRetries int `json:"sandbox_retries,omitempty"`
 	// Record is the authoritative source of decisions taken during this work.
 	Record DecisionRecord `json:"decision_record"`
 	// Spend is what the work has cost so far, per phase.

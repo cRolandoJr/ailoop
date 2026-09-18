@@ -36,7 +36,24 @@ func (l *Loop) Verify(ctx context.Context) (*VerifyReport, error) {
 		return nil, fmt.Errorf("%w in %s", ErrNoChecks, config.Path(l.workspace))
 	}
 
-	results := verify.Run(ctx, l.workspace, cfg.Verify,
+	return l.VerifyDir(ctx, l.workspace)
+}
+
+// VerifyDir runs the checks the project declared, but in a specific directory (like a sandbox).
+func (l *Loop) VerifyDir(ctx context.Context, dir string) (*VerifyReport, error) {
+	cfg := l.cfg
+	if cfg == nil {
+		loaded, err := config.Load(dir)
+		if err != nil {
+			return nil, err
+		}
+		cfg = loaded
+	}
+	if len(cfg.Verify) == 0 {
+		return nil, fmt.Errorf("%w in %s", ErrNoChecks, config.Path(dir))
+	}
+
+	results := verify.Run(ctx, dir, cfg.Verify,
 		time.Duration(cfg.TimeoutSeconds)*time.Second)
 
 	return &VerifyReport{Results: results, Passed: verify.AllPassed(results)}, nil

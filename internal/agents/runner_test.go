@@ -22,6 +22,9 @@ type fakeLLM struct {
 	// caps lets a test say what the doubled model can do, which is how the
 	// capability gate gets exercised without a real provider.
 	caps llm.Capabilities
+	// streamed counts the calls that came through GenerateStream, so a test
+	// can tell whether the person would have seen the text appear.
+	streamed int
 }
 
 func (f *fakeLLM) Describe() llm.Capabilities { return f.caps }
@@ -30,6 +33,7 @@ func (f *fakeLLM) Describe() llm.Capabilities { return f.caps }
 // necesita simular el streaming, sino cumplir el contrato del puerto. Si un
 // test necesitara los chunks, se le agrega ahi.
 func (f *fakeLLM) GenerateStream(ctx context.Context, messages []llm.Message, onChunk func(string)) (llm.Response, error) {
+	f.streamed++
 	resp, err := f.Generate(ctx, messages)
 	if err == nil && onChunk != nil && resp.Text != "" {
 		onChunk(resp.Text)

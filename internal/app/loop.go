@@ -18,6 +18,7 @@ import (
 	"github.com/cRolandoJr/ailoop/internal/config"
 	"github.com/cRolandoJr/ailoop/internal/env"
 	"github.com/cRolandoJr/ailoop/internal/llm"
+	"github.com/cRolandoJr/ailoop/internal/lsp"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
 	"github.com/cRolandoJr/ailoop/internal/state"
 	"github.com/cRolandoJr/ailoop/internal/web"
@@ -34,12 +35,26 @@ type Loop struct {
 	client    llm.Client
 	pool      *mcp.Pool
 	cfg       *config.Config
+	lspClient *lsp.Client
 }
 
 // NewLoop builds a loop over a workspace. client, pool and cfg may be nil for
 // use cases that do not need them; the ones that do return a clear error.
-func NewLoop(workspace string, client llm.Client, pool *mcp.Pool, cfg *config.Config) *Loop {
-	return &Loop{workspace: workspace, client: client, pool: pool, cfg: cfg}
+func NewLoop(workspace string, client llm.Client, pool *mcp.Pool, cfg *config.Config, lspClient *lsp.Client) *Loop {
+	return &Loop{workspace: workspace, client: client, pool: pool, cfg: cfg, lspClient: lspClient}
+}
+
+// Close releases what the loop started. The language server is a child
+// process: whoever opened it owns ending it, and until now nobody did, so
+// every heavy command left one running until the process itself exited.
+//
+// It is safe on a loop that has none, because the read-only commands build
+// one that way and a caller should not have to remember which is which.
+func (l *Loop) Close() error {
+	if l.lspClient == nil {
+		return nil
+	}
+	return l.lspClient.Close()
 }
 
 // Workspace is the directory this loop operates on.
