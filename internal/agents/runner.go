@@ -287,6 +287,10 @@ exact existing lines to be replaced (including leading whitespace)
 ====
 new lines to replace them with
 >>>>
+To CREATE a new file, use the same block with the file path and the search
+section left EMPTY (nothing between the ==== markers): an empty search on a
+file that does not exist means "create it with these lines". There is no
+separate tool for creating files.
 ` + baseTeaching + localRAG
 	case state.PhaseVerification:
 		return `You are the Verification Agent. Review the code changes and verify they meet the Design.`
