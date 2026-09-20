@@ -33,15 +33,35 @@ var ErrNoClient = errors.New("no LLM client configured")
 type Loop struct {
 	workspace string
 	client    llm.Client
-	pool      *mcp.Pool
-	cfg       *config.Config
-	lspClient *lsp.Client
+	// phaseClients overrides the client for specific phases; absent phases
+	// keep the default. See RouteClients.
+	phaseClients map[state.Phase]llm.Client
+	pool         *mcp.Pool
+	cfg          *config.Config
+	lspClient    *lsp.Client
 }
 
 // NewLoop builds a loop over a workspace. client, pool and cfg may be nil for
 // use cases that do not need them; the ones that do return a clear error.
 func NewLoop(workspace string, client llm.Client, pool *mcp.Pool, cfg *config.Config, lspClient *lsp.Client) *Loop {
 	return &Loop{workspace: workspace, client: client, pool: pool, cfg: cfg, lspClient: lspClient}
+}
+
+// RouteClients assigns a dedicated client to some phases, so judgment-heavy
+// phases can run on a strong model while mechanical ones stay cheap, and the
+// verifier can run on DIFFERENT weights than the implementer - same-weight
+// verification shares its blind spots (SPEC-ruteo-proveedor-por-fase).
+func (l *Loop) RouteClients(m map[state.Phase]llm.Client) {
+	l.phaseClients = m
+}
+
+// clientFor answers which client serves a phase: its routed one, or the
+// default the Loop was built with.
+func (l *Loop) clientFor(ph state.Phase) llm.Client {
+	if c, ok := l.phaseClients[ph]; ok && c != nil {
+		return c
+	}
+	return l.client
 }
 
 // Close releases what the loop started. The language server is a child

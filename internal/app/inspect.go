@@ -120,6 +120,10 @@ func (l *Loop) Decide(statement, rationale string) (state.Decision, error) {
 type PhaseGrants struct {
 	Phase   state.Phase
 	Granted []tools.Capability
+	// Provider and Model are who actually serves this phase - with routing,
+	// phases differ, and a report that named only "the" model would lie.
+	Provider string
+	Model    string
 }
 
 // CapabilitiesReport answers "what can this model do, and what may each phase
@@ -134,12 +138,15 @@ func (l *Loop) Capabilities() (*CapabilitiesReport, error) {
 		return nil, ErrNoClient
 	}
 
-	caps := l.client.Describe()
-	r := &CapabilitiesReport{Model: caps}
+	r := &CapabilitiesReport{Model: l.client.Describe()}
 
 	for _, ph := range state.Phases() {
+		// Grants are computed against the client that actually serves the
+		// phase: with routing, vision (and so fs.read_image) differs per
+		// phase, and grants derived from the default would lie.
+		caps := l.clientFor(ph).Describe()
 		reg := agents.RegistryFor(ph, l.declaredCommands(), caps, l.pool, nil, l.lspClient)
-		g := PhaseGrants{Phase: ph}
+		g := PhaseGrants{Phase: ph, Provider: caps.Provider, Model: caps.Model}
 		for _, c := range tools.All {
 			if reg.Allowed[c] {
 				g.Granted = append(g.Granted, c)

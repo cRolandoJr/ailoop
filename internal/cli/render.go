@@ -104,6 +104,12 @@ func Capabilities(r *app.CapabilitiesReport) {
 		for _, c := range g.Granted {
 			names = append(names, string(c))
 		}
-		fmt.Printf("  %-16s %s\n", g.Phase, strings.Join(names, ", "))
+		// With phase routing, WHO serves the phase is part of the answer:
+		// grants are computed against that client, not against the default.
+		who := ""
+		if g.Provider != "" && (g.Provider != r.Model.Provider || g.Model != r.Model.Model) {
+			who = fmt.Sprintf(" [%s %s]", g.Provider, g.Model)
+		}
+		fmt.Printf("  %-16s%s %s\n", g.Phase, who, strings.Join(names, ", "))
 	}
 }

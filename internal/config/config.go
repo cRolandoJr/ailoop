@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -39,6 +40,12 @@ type Config struct {
 	// Web is where the research agent may go. Empty means nowhere, which is
 	// the default: research is opt-in, per project.
 	Web WebPolicy `json:"web,omitempty"`
+	// Providers routes phases to LLM providers, so the judgment-heavy phases
+	// can run on a strong model while the mechanical ones run on a cheap one
+	// (docs/SPEC-ruteo-proveedor-por-fase.md). Keys: "default" plus phase
+	// names in lowercase; values: "claude", "gemini", "openai". Empty means
+	// the single env-selected client, exactly as before this field existed.
+	Providers map[string]string `json:"providers,omitempty"`
 	// LSP configures the language server protocol command for the workspace.
 	// Empty means detect automatically based on files.
 	LSP []string `json:"lsp,omitempty"`
@@ -79,7 +86,44 @@ func Load(targetDir string) (*Config, error) {
 	if c.TimeoutSeconds <= 0 {
 		c.TimeoutSeconds = DefaultTimeoutSeconds
 	}
+	// A typo here would silently route nothing: the phase you thought you
+	// configured keeps the default model and no symptom names the cause.
+	// Fail-closed at load, naming the broken key.
+	for k := range c.Providers {
+		if _, ok := providerKeys[k]; !ok {
+			return nil, fmt.Errorf("providers: unknown key %q (valid: default, discovery, design, plan, implementation, verification)", k)
+		}
+	}
 	return &c, nil
+}
+
+// providerKeys is every key Providers accepts, and the phase each one names.
+// "default" maps to no phase: it replaces the env-selected client instead.
+var providerKeys = map[string]state.Phase{
+	"default":        "",
+	"discovery":      state.PhaseDiscovery,
+	"design":         state.PhaseDesign,
+	"plan":           state.PhasePlan,
+	"implementation": state.PhaseImplementation,
+	"verification":   state.PhaseVerification,
+}
+
+// PhaseProviders resolves the Providers block into a phase→provider map plus
+// the default provider name ("" when unset). Keys were validated at Load, so
+// this cannot fail.
+func (c *Config) PhaseProviders() (map[state.Phase]string, string) {
+	byPhase := map[state.Phase]string{}
+	def := ""
+	for k, v := range c.Providers {
+		if k == "default" {
+			def = v
+			continue
+		}
+		if ph, ok := providerKeys[k]; ok {
+			byPhase[ph] = v
+		}
+	}
+	return byPhase, def
 }
 
 func Save(targetDir string, c *Config) error {

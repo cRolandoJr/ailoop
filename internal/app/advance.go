@@ -296,10 +296,15 @@ func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOption
 		projectContext += "</VISUAL_CONTEXT>\n"
 	}
 
+	// The phase decides which model serves it: judgment on the strong one,
+	// mechanics on the cheap one, and a verifier on different weights than
+	// the implementer (SPEC-ruteo-proveedor-por-fase).
+	phaseClient := l.clientFor(s.CurrentPhase)
+
 	run := func() (string, error) {
 		return agents.RunPhase(ctx, agents.PhaseInput{
 			State:          s,
-			Client:         l.client,
+			Client:         phaseClient,
 			Workspace:      l.workspace,
 			ProjectContext: projectContext,
 			Attachments:    attach.Images(atts),
@@ -331,7 +336,7 @@ func (l *Loop) propose(ctx context.Context, s *state.AIState, opts AdvanceOption
 			opts.progress("budget", err.Error())
 			break
 		}
-		critique, err := agents.EvaluateProposal(ctx, s.TaskDescription, proposal, l.client)
+		critique, err := agents.EvaluateProposal(ctx, s.TaskDescription, proposal, phaseClient)
 		if critique != nil {
 			s.Spend.Record(s.CurrentPhase, critique.Usage)
 		}

@@ -6,12 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cRolandoJr/ailoop/internal/app"
 	"github.com/cRolandoJr/ailoop/internal/cli"
@@ -382,81 +380,24 @@ func run(args []string) int {
 	return 0
 }
 
-// defaultGeminiModel is what runs when GEMINI_MODEL is unset.
-//
-// It is a measured choice, not a guess: the 2.5 family now answers 404 for
-// new keys, 3.6 through 3.8 answered 503, and this one and
-// gemini-3.1-flash-lite were the two that actually responded. A default
-// pointing at a retired model fails with a 404 that says nothing about the
-// real cause.
-const defaultGeminiModel = "gemini-3.5-flash"
-
-// responseHeaderTimeout bounds the wait for the provider's FIRST byte.
-//
-// Measured on this project's free Gemini tier: one request in three took 68
-// seconds to first byte while the others took under 10. A ceiling anywhere
-// near the median turns ordinary tail latency into a failed run.
-const responseHeaderTimeout = 180 * time.Second
-
-// httpClient builds the transport used by the hand-written adapters.
-//
-// It deliberately leaves http.Client.Timeout unset. That field bounds the
-// whole exchange INCLUDING reading the body, so on a streaming response it
-// cuts off an answer that is arriving correctly - the longer the useful
-// output, the likelier it is killed. What actually needs a ceiling is the
-// wait for a provider that never answers, and that is a different clock:
-// ResponseHeaderTimeout. Cancellation of a healthy-but-long stream stays with
-// the context the caller already passes.
-//
-// The transport is cloned from the default so proxy handling, dialing and
-// HTTP/2 keep working; building an http.Transport from scratch silently drops
-// all three.
-func httpClient() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Transport: tr}
-}
-
 func getLLMClient() llm.Client {
-	// Anthropic first: it is the only adapter here that reports vision and
-	// thinking as established rather than unknown. It is also the only one
-	// not wrapped in WithRetry - the official SDK classifies and retries on
-	// its own, and two stacked policies multiply the wait without improving
-	// the odds.
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		return llm.NewClaudeClient(key, os.Getenv("ANTHROPIC_MODEL"))
-	}
-
-	geminiKey := os.Getenv("GEMINI_API_KEY")
-	if geminiKey != "" {
-		geminiModel := os.Getenv("GEMINI_MODEL")
-		if geminiModel == "" {
-			geminiModel = defaultGeminiModel
+	// Env-var precedence, unchanged: the first credential found wins. The
+	// construction of each provider (retry policy included) lives once, in
+	// llm.FromName; this only picks WHICH one when no config routes phases.
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		if c, err := llm.FromName("claude"); err == nil {
+			return c
 		}
-		return llm.WithRetry(&llm.GeminiClient{
-			APIKey: geminiKey,
-			Model:  geminiModel,
-			HTTP:   httpClient(),
-		}, llm.DefaultAttempts)
 	}
-
-	baseURL := os.Getenv("OPENAI_BASE_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:11434/v1"
+	if os.Getenv("GEMINI_API_KEY") != "" {
+		if c, err := llm.FromName("gemini"); err == nil {
+			return c
+		}
 	}
-
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	model := os.Getenv("OPENAI_MODEL")
-	if model == "" {
-		model = "llama3"
-	}
-
-	return llm.WithRetry(&llm.OpenAIClient{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
-		HTTP:    httpClient(),
-	}, llm.DefaultAttempts)
+	// The OpenAI-compatible default (local Ollama) needs no credential and
+	// cannot fail to construct.
+	c, _ := llm.FromName("openai")
+	return c
 }
 
 func printUsage() {
@@ -537,7 +478,31 @@ func buildLoop(ctx context.Context, workspace string) (*app.Loop, *mcp.Pool, err
 		}
 	}
 
-	return app.NewLoop(workspace, getLLMClient(), pool, cfg, lspClient), pool, nil
+	// Phase routing (SPEC-ruteo-proveedor-por-fase): a provider NAMED in the
+	// config that cannot be built is an error naming its missing credential,
+	// never a silent fallback to some other model.
+	byPhase, defName := cfg.PhaseProviders()
+	def := getLLMClient()
+	if defName != "" {
+		c, err := llm.FromName(defName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("providers.default: %w", err)
+		}
+		def = c
+	}
+	loop := app.NewLoop(workspace, def, pool, cfg, lspClient)
+	if len(byPhase) > 0 {
+		routed := map[state.Phase]llm.Client{}
+		for ph, name := range byPhase {
+			c, err := llm.FromName(name)
+			if err != nil {
+				return nil, nil, fmt.Errorf("providers.%s: %w", strings.ToLower(string(ph)), err)
+			}
+			routed[ph] = c
+		}
+		loop.RouteClients(routed)
+	}
+	return loop, pool, nil
 }
 
 // runSession is what "ailoop" with no arguments opens: one process, one MCP
