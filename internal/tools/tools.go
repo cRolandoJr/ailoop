@@ -70,6 +70,13 @@ const (
 // offered to a model.
 var All = []Capability{FSRead, FSList, FSGlob, FSGrep, FSReadImage, MCPDescribe, MCPCall, ResearchAsk, WebFetch, CmdRun, LSPDefinition, LSPReferences}
 
+// The delimiters of a tool block. They are constants so the parser and the
+// message that complains about them cannot drift apart.
+const (
+	openTool  = "<<TOOL>>"
+	closeTool = "<<END>>"
+)
+
 // Request is one tool invocation asked for by the model.
 type Request struct {
 	Cap Capability
@@ -234,9 +241,9 @@ func (r *Registry) permits(c Capability) bool {
 func Parse(text string) []Request {
 	var reqs []Request
 
-	parts := strings.Split(text, "<<TOOL>>")
+	parts := strings.Split(text, openTool)
 	for _, part := range parts[1:] {
-		end := strings.Index(part, "<<END>>")
+		end := strings.Index(part, closeTool)
 		if end == -1 {
 			continue // unterminated block: ignored rather than guessed at
 		}

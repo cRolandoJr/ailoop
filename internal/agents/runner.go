@@ -169,6 +169,23 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 		}
 
 		if len(reqs) == 0 {
+			// A block the model meant to send and Parse could not read is not
+			// an answer. Ending the phase here left it believing it had asked
+			// for a file, and left the person with a phase that closed in one
+			// round having done nothing.
+			if problem := tools.MalformedBlock(reply); problem != "" {
+				if observe != nil {
+					observe(tools.Result{
+						Request: tools.Request{Cap: "tool.malformed"},
+						Output:  problem,
+					})
+				}
+				messages = append(messages,
+					llm.Message{Role: "assistant", Content: reply, Round: round},
+					llm.Message{Role: "user", Content: problem, Round: round},
+				)
+				continue
+			}
 			extractDecisions(s, reply)
 			return reply, nil
 		}

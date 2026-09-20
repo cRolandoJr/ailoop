@@ -89,3 +89,31 @@ func TestLaRondaDeCorteTambienSeTransmite(t *testing.T) {
 		t.Errorf("%d de %d llamadas se transmitieron: la ronda de corte quedo muda", f.streamed, f.calls)
 	}
 }
+
+// El bloque mal abierto no puede terminar la fase: el modelo creia que habia
+// pedido un archivo y el loop creia que habia terminado. Medido en
+// IMPLEMENTATION, que cerro en una ronda con cero parches por esto.
+func TestUnBloqueMalAbiertoNoTerminaLaFase(t *testing.T) {
+	f := &fakeLLM{replies: []string{
+		"Veamos el codigo.\n**TOOL**\nfs.read: x.go\n<<END>>",
+		"listo, ya vi lo que necesitaba",
+	}}
+
+	s := state.NewState("tarea")
+	out, err := RunPhase(context.Background(), PhaseInput{State: s, Client: f, Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+
+	if out == "Veamos el codigo.\n**TOOL**\nfs.read: x.go\n<<END>>" {
+		t.Fatal("cerro la fase tomando el bloque roto como respuesta final")
+	}
+	if out != "listo, ya vi lo que necesitaba" {
+		t.Fatalf("salida = %q", out)
+	}
+
+	aviso := ultimoMensaje(t, f, 1)
+	if !strings.Contains(aviso, "<<TOOL>>") {
+		t.Errorf("no le dijo que el bloque estaba mal abierto:\n%s", aviso)
+	}
+}
