@@ -23,7 +23,10 @@ func repo(t *testing.T) string {
 		t.Skip("sin git")
 	}
 	ws := t.TempDir()
-	git(t, ws, "init", "-q", ".")
+	// -b main: sin el flag, la rama inicial depende del init.defaultBranch
+	// del HOST (en el sandbox de nix, sin config global, es master) y el test
+	// que espera "branches/main" falla segun donde corra.
+	git(t, ws, "init", "-q", "-b", "main", ".")
 	git(t, ws, "config", "user.email", "t@t")
 	git(t, ws, "config", "user.name", "t")
 	if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("x\n"), 0644); err != nil {

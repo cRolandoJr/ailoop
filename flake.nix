@@ -49,6 +49,13 @@
 
             nativeBuildInputs = [ pkgs.makeWrapper ];
 
+            # Los tests del sandbox hacen `git init` de verdad (sandbox_test.go)
+            # y el sandbox de nix no hereda el PATH del host: sin esto, el
+            # paquete compilaba en el devShell y fallaba en `nix build` con
+            # "git": executable file not found — roto desde af42ea2 sin que
+            # nadie corriera el build.
+            nativeCheckInputs = [ pkgs.git ];
+
             postInstall = ''
               wrapProgram $out/bin/ailoop \
                 --prefix PATH : ${pkgs.lib.makeBinPath (runtimeTools pkgs)}
