@@ -1,11 +1,13 @@
 package agents
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/cRolandoJr/ailoop/internal/llm"
@@ -342,6 +344,7 @@ var citationRegex = regexp.MustCompile(`\[([^:]+):(\d+)(?:-(\d+))?\]`)
 
 func checkCitations(workspace, text string) []string {
 	var invalid []string
+	lines := map[string]int{}
 	matches := citationRegex.FindAllStringSubmatch(text, -1)
 
 	for _, match := range matches {
@@ -363,11 +366,43 @@ func checkCitations(workspace, text string) []string {
 			continue
 		}
 
-		// Optional: We could check if line numbers are out of bounds by reading the file
-		// but to keep it fast, we just check file existence for now.
+		// A citation to line 900 of a 40-line file is exactly the hallucination
+		// this check exists to catch: the file is real, the claim is not. The
+		// count is cached per call because a verdict cites the same file often.
+		total, ok := lines[fullPath]
+		if !ok {
+			total = countLines(fullPath)
+			lines[fullPath] = total
+		}
+		if total < 0 {
+			continue // unreadable after a successful Stat: do not guess
+		}
+		from, _ := strconv.Atoi(match[2])
+		to := from
+		if match[3] != "" {
+			to, _ = strconv.Atoi(match[3])
+		}
+		if from < 1 || to < from || to > total {
+			invalid = append(invalid, fmt.Sprintf("%s: line out of range (file has %d lines)", match[0], total))
+		}
 	}
 
 	return invalid
+}
+
+// countLines reports how many lines a file has, or -1 when it cannot be read.
+// A trailing newline ends the last line, it does not start an empty extra one:
+// "a\nb\n" has two lines, and a citation to its line 3 must bounce.
+func countLines(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return -1
+	}
+	n := bytes.Count(data, []byte("\n"))
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		n++
+	}
+	return n
 }
 
 // visibleTo drops attached images when the model cannot see them. Sending an

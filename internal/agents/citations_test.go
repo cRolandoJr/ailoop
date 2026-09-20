@@ -78,6 +78,66 @@ func TestTextoSinCitasNoProduceFalsosPositivos(t *testing.T) {
 	}
 }
 
+func TestCitacionALineaFueraDeRangoSeDetecta(t *testing.T) {
+	// La alucinacion tipica del juez debil: archivo real, linea inventada.
+	// Una cita a la linea 900 de un archivo de 3 tiene que rebotar ANTES de
+	// que la respuesta cuente como evidencia.
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "real.go"), []byte("a\nb\nc\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	malas := checkCitations(ws, "el defecto esta en [real.go:900]")
+	if len(malas) != 1 {
+		t.Fatalf("detecto %d citas invalidas, quiero 1: %v", len(malas), malas)
+	}
+	if !strings.Contains(malas[0], "line") {
+		t.Errorf("el motivo no nombra la linea: %q", malas[0])
+	}
+}
+
+func TestCitacionALineaCeroSeRechaza(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "real.go"), []byte("a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if malas := checkCitations(ws, "ver [real.go:0]"); len(malas) != 1 {
+		t.Errorf("acepto la linea 0: %v", malas)
+	}
+}
+
+func TestCitacionConRangoInvertidoOExcedidoSeRechaza(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "real.go"), []byte("a\nb\nc\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, cita := range []string{"[real.go:3-1]", "[real.go:2-9]"} {
+		if malas := checkCitations(ws, "ver "+cita); len(malas) != 1 {
+			t.Errorf("%s: detecto %d, quiero 1: %v", cita, len(malas), malas)
+		}
+	}
+}
+
+func TestElConteoDeLineasNoRegalaUnaPorLaNewlineFinal(t *testing.T) {
+	// "a\nb" son DOS lineas; contar separadores + 1 a ciegas daria 2 tambien,
+	// pero "a\nb\n" daria 3 y la linea 3 no existe. El borde vive aca.
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "sin.go"), []byte("a\nb"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "con.go"), []byte("a\nb\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if malas := checkCitations(ws, "ver [sin.go:2] y [con.go:2]"); len(malas) != 0 {
+		t.Errorf("rechazo la ultima linea real: %v", malas)
+	}
+	if malas := checkCitations(ws, "ver [sin.go:3]"); len(malas) != 1 {
+		t.Errorf("acepto una linea que solo existe si contas la newline final: %v", malas)
+	}
+	if malas := checkCitations(ws, "ver [con.go:3]"); len(malas) != 1 {
+		t.Errorf("acepto la linea fantasma post-newline: %v", malas)
+	}
+}
+
 func TestExtractDecisionsRegistraElFormatoDelRepo(t *testing.T) {
 	s := state.NewState("tarea")
 	extractDecisions(s, "Analisis.\n<<<< DECISION\nStatement: el config va en JSON\nRationale: cero dependencias\n>>>>\nSigo.")
