@@ -44,3 +44,17 @@ capacidad (gatillo: la implementación del verificador independiente, que es
 quien las consume — `docs/SPEC-verificador-independiente.md`). Hooks
 allow/deny/ask (§18.15: diseño propio). Vision en el adaptador OpenAI y caching
 de Gemini (gatillo: primer uso real de cada uno).
+
+## 5. Anotado por el revisor adversarial (aceptado, con gatillo)
+
+- **Citas post-patch en IMPLEMENTATION**: checkCitations ahora rebota una cita a
+  una línea que existirá DESPUÉS del parche (consume una ronda devolviéndosela
+  al modelo). Solo dispara con el formato `[file:línea]`, que el prompt de esa
+  fase no pide. Gatillo: la primera corrida real que pierda rondas por esto.
+- **`Budget.MaxUSD` con ruteo mezcla proveedores a UN par de precios**
+  (`PriceIn/OutPerMTok` es singular). El ledger por fase sigue siendo correcto;
+  el techo en USD queda impreciso. Gatillo: primer uso real de `max_usd` junto
+  con `providers`.
+- **`ailoop verify` (no usa modelo) muere si el config rutea a un proveedor sin
+  credencial**, porque pasa por buildLoop. Coherente con fail-closed y sin rama
+  defensiva hasta que duela. Gatillo: la primera vez que moleste en el uso real.

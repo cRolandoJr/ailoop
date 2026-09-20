@@ -89,9 +89,16 @@ func Load(targetDir string) (*Config, error) {
 	// A typo here would silently route nothing: the phase you thought you
 	// configured keeps the default model and no symptom names the cause.
 	// Fail-closed at load, naming the broken key.
-	for k := range c.Providers {
+	for k, v := range c.Providers {
 		if _, ok := providerKeys[k]; !ok {
 			return nil, fmt.Errorf("providers: unknown key %q (valid: default, discovery, design, plan, implementation, verification)", k)
+		}
+		// An empty value would slip through as "unset" downstream and fall
+		// back to the env-selected client - the silent fallback this block
+		// exists to eliminate. A present key states an intent; empty cannot
+		// satisfy it.
+		if v == "" {
+			return nil, fmt.Errorf("providers: key %q has an empty value (valid: claude, gemini, openai)", k)
 		}
 	}
 	return &c, nil

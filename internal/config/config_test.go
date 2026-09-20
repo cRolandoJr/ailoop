@@ -145,3 +145,25 @@ func TestSinProvidersNoHayRuteo(t *testing.T) {
 		t.Errorf("un config sin providers ruteo algo: %v, %q", byPhase, def)
 	}
 }
+
+func TestProvidersConValorVacioNoCarga(t *testing.T) {
+	// El hallazgo del revisor adversarial: {"default": ""} pasaba la
+	// validacion de claves y buildLoop lo trataba como ausente — fallback
+	// silencioso a la precedencia por env, exactamente el modo de falla que
+	// providers existe para eliminar. La asimetria delataba el accidente: la
+	// MISMA cadena vacia en una clave de fase si fallaba (en FromName).
+	for _, clave := range []string{"default", "verification"} {
+		dir := t.TempDir()
+		if err := Save(dir, &Config{Providers: map[string]string{clave: ""}}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(dir)
+		if err == nil {
+			t.Errorf("%s vacio cargo sin error", clave)
+			continue
+		}
+		if !strings.Contains(err.Error(), clave) {
+			t.Errorf("el error no nombra la clave con valor vacio: %v", err)
+		}
+	}
+}

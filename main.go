@@ -418,14 +418,6 @@ func printUsage() {
 	fmt.Println("  ailoop history                  - Show archived revisions of each artifact")
 }
 
-// geminiModel lets the model be configured instead of frozen in the binary.
-func geminiModel() string {
-	if m := os.Getenv("GEMINI_MODEL"); m != "" {
-		return m
-	}
-	return "gemini-2.5-pro"
-}
-
 // newLoop is the composition root for the read-only commands: it wires the
 // dependencies a use case needs and hands back something testable. The heavy
 // commands build their own with the MCP pool and config attached.
