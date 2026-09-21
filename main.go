@@ -371,6 +371,26 @@ func run(args []string) int {
 			return 1
 		}
 
+	case "golden":
+		loop, pool, err := buildLoop(context.Background(), cwd)
+		if err != nil {
+			cli.Error(err)
+			return 1
+		}
+		defer loop.Close()
+		if pool != nil {
+			defer pool.Close()
+		}
+		run, err := loop.Golden(context.Background(), strings.Join(args[2:], " "))
+		if err != nil {
+			cli.Error(err)
+			return 1
+		}
+		cli.GoldenReport(run)
+		if !run.AllPassed() {
+			return 1
+		}
+
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -408,6 +428,7 @@ func printUsage() {
 	fmt.Println("  ailoop next --inline             - ...pasting those files in full instead of letting the agent read them")
 	fmt.Println("  ailoop undo                     - Revert to the previous phase")
 	fmt.Println("  ailoop status                   - Show current state")
+	fmt.Println("  ailoop golden [note]            - Run the golden cases and record the run")
 	fmt.Println("  ailoop verify                   - Run the project's own verification commands")
 	fmt.Println("  ailoop doctor                   - Show which external tools this machine offers")
 	fmt.Println("  ailoop capabilities             - Show what the selected model can do, and what each phase may use")

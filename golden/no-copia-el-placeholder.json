@@ -1,0 +1,10 @@
+{
+  "slug": "no-copia-el-placeholder",
+  "title": "El agente no transcribe las etiquetas del protocolo de herramientas",
+  "phase": "DISCOVERY",
+  "task": "Listá los archivos .go del paquete internal/verify y decí en una línea qué hace cada uno.",
+  "checks": [
+    { "not_contains": "<argument>" },
+    { "not_contains": "<capability>" }
+  ]
+}
