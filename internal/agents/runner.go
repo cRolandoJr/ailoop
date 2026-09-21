@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cRolandoJr/ailoop/internal/llm"
 	"github.com/cRolandoJr/ailoop/internal/mcp"
@@ -56,7 +57,7 @@ type PhaseInput struct {
 }
 
 // RunPhase executes the agent of the current phase.
-func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
+func RunPhase(ctx context.Context, in PhaseInput) (out string, err error) {
 	s := in.State
 	client := in.Client
 	projectContext := in.ProjectContext
@@ -79,7 +80,22 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			return Research(ctx, question, client, fetcher, observe)
 		}
 	}
-	reg := RegistryFor(s.CurrentPhase, declaredCmds, client.Describe(), pool, research, in.LSP)
+	// One journal line per phase run. Spend aggregates by phase for the budget;
+	// this is the grain that answers what a given agent did to the workspace,
+	// which the aggregate cannot. Written from a defer so every exit records,
+	// including the ones that return an error.
+	caps := client.Describe()
+	turn := state.Turn{Phase: string(s.CurrentPhase), Provider: caps.Provider, Model: caps.Model}
+	started := time.Now()
+	defer func() {
+		turn.DurationSeconds = time.Since(started).Seconds()
+		if err != nil {
+			turn.Err = err.Error()
+		}
+		state.AppendTurn(workspace, turn)
+	}()
+
+	reg := RegistryFor(s.CurrentPhase, declaredCmds, caps, pool, research, in.LSP)
 	sysPrompt += tools.Protocol(reg, workspace)
 
 	// Build the context for the LLM based on current state
@@ -156,6 +172,8 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			return "", err
 		}
 		s.Spend.Record(s.CurrentPhase, resp.Usage)
+		turn.Usage.Add(resp.Usage)
+		turn.Rounds = round + 1
 		reply := resp.Text
 
 		reqs := tools.Parse(reply)
@@ -212,6 +230,7 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 				return "", err
 			}
 			s.Spend.Record(s.CurrentPhase, last.Usage)
+			turn.Usage.Add(last.Usage)
 			return last.Text, nil
 		}
 
@@ -222,6 +241,12 @@ func RunPhase(ctx context.Context, in PhaseInput) (string, error) {
 			res := tools.Execute(ctx, workspace, reg, req)
 			if observe != nil {
 				observe(res)
+			}
+			switch {
+			case req.Cap == "cmd.run":
+				turn.CommandsRun = append(turn.CommandsRun, req.Arg)
+			case strings.HasPrefix(string(req.Cap), "fs."):
+				turn.FilesRead = append(turn.FilesRead, req.Arg)
 			}
 			images = append(images, res.Images...)
 
