@@ -185,14 +185,17 @@ type CaseResult struct {
 // look identical in the output — the prompt changed, or the weights did — and
 // phase routing guarantees they change independently.
 type Run struct {
-	Time     time.Time    `json:"time"`
-	Provider string       `json:"provider,omitempty"`
-	Model    string       `json:"model,omitempty"`
-	Trigger  string       `json:"trigger,omitempty"`
-	Note     string       `json:"note,omitempty"`
-	Total    int          `json:"total"`
-	Passed   int          `json:"passed"`
-	Results  []CaseResult `json:"results,omitempty"`
+	Time     time.Time `json:"time"`
+	Provider string    `json:"provider,omitempty"`
+	Model    string    `json:"model,omitempty"`
+	Trigger  string    `json:"trigger,omitempty"`
+	Note     string    `json:"note,omitempty"`
+	Total    int       `json:"total"`
+	Passed   int       `json:"passed"`
+	// Blocked are the cases that never produced an answer to check. Counted
+	// apart because a missing precondition is not a failing circuit.
+	Blocked int          `json:"blocked,omitempty"`
+	Results []CaseResult `json:"results,omitempty"`
 }
 
 // Evaluate applies the checks to one output. It is pure: same text, same
@@ -250,7 +253,10 @@ func Execute(ctx context.Context, cases []Case, produce Producer) Run {
 			res.Passed, res.Checks = Evaluate(out, c.Checks)
 		}
 		run.Total++
-		if res.Passed {
+		switch {
+		case res.Err != "":
+			run.Blocked++
+		case res.Passed:
 			run.Passed++
 		}
 		run.Results = append(run.Results, res)
@@ -265,6 +271,28 @@ func Execute(ctx context.Context, cases []Case, produce Producer) Run {
 // and the one that makes an empty suite loud instead of reassuring.
 func (r Run) AllPassed() bool {
 	return r.Total > 0 && r.Passed == r.Total
+}
+
+// Verdict names which of the four states the run is in.
+//
+// The distinction earned itself on the first real run: both cases reached the
+// circuit, the circuit did its work, and the provider returned 503 on the
+// answer. Reporting that as FAIL would have sent someone to fix an agent that
+// was not broken — and BLOCKED is precisely the state the protocol says never
+// to retry against, because the thing to repair is the precondition.
+func (r Run) Verdict() string {
+	switch {
+	case r.Total == 0:
+		return "EMPTY"
+	case r.Passed == r.Total:
+		return "PASS"
+	case r.Total-r.Blocked > r.Passed:
+		// At least one case ran to completion and failed its checks. A real
+		// finding outranks a missing precondition: the suite IS red.
+		return "FAIL"
+	default:
+		return "BLOCKED"
+	}
 }
 
 // AppendRun records the run. Like the turn journal it is best-effort: a lost

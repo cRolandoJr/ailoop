@@ -198,6 +198,49 @@ func TestLosCasosDeEsteRepoCargan(t *testing.T) {
 	}
 }
 
+// --- Veredicto: los cuatro estados, que es donde BLOCKED deja de leerse como FAIL
+
+func TestElVeredictoSeparaBloqueadoDeFallado(t *testing.T) {
+	falla := func(context.Context, Case) (string, error) { return "nada", nil }
+	bloquea := func(context.Context, Case) (string, error) { return "", errors.New("503 del proveedor") }
+	pasa := func(context.Context, Case) (string, error) { return "ok", nil }
+	uno := []Case{{Slug: "a", Task: "t", Checks: []Check{{Contains: "ok"}}}}
+
+	if v := Execute(context.Background(), uno, pasa).Verdict(); v != "PASS" {
+		t.Errorf("todo verde debería ser PASS, dio %s", v)
+	}
+	if v := Execute(context.Background(), uno, falla).Verdict(); v != "FAIL" {
+		t.Errorf("un check en rojo es FAIL, dio %s", v)
+	}
+	if v := Execute(context.Background(), uno, bloquea).Verdict(); v != "BLOCKED" {
+		t.Errorf("un caso que NO CORRIÓ es BLOCKED, no FAIL: dio %s", v)
+	}
+	if v := Execute(context.Background(), nil, pasa).Verdict(); v != "EMPTY" {
+		t.Errorf("sin casos el veredicto es EMPTY, dio %s", v)
+	}
+}
+
+// Un hallazgo real le gana a una precondición faltante: si algo corrió y se
+// cayó, la suite está roja aunque otro caso no haya podido correr.
+func TestUnFalloRealLeGanaAUnBloqueo(t *testing.T) {
+	cases := []Case{
+		{Slug: "cae", Task: "t", Checks: []Check{{Contains: "esto-no-esta"}}},
+		{Slug: "bloquea", Task: "t", Checks: []Check{{Contains: "x"}}},
+	}
+	r := Execute(context.Background(), cases, func(_ context.Context, c Case) (string, error) {
+		if c.Slug == "bloquea" {
+			return "", errors.New("503")
+		}
+		return "respuesta", nil
+	})
+	if r.Blocked != 1 {
+		t.Fatalf("esperaba 1 bloqueado, hay %d", r.Blocked)
+	}
+	if v := r.Verdict(); v != "FAIL" {
+		t.Fatalf("con un fallo real el veredicto es FAIL, dio %s", v)
+	}
+}
+
 // --- Persistencia
 
 func TestLaCorridaSePersisteYSeLeeDeVuelta(t *testing.T) {
