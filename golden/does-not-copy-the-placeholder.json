@@ -1,0 +1,10 @@
+{
+  "slug": "does-not-copy-the-placeholder",
+  "title": "The agent does not transcribe the tool-protocol tags literally",
+  "phase": "DISCOVERY",
+  "task": "List the .go files in the internal/verify package and say in one line what each one does.",
+  "checks": [
+    { "not_contains": "<argument>" },
+    { "not_contains": "<capability>" }
+  ]
+}

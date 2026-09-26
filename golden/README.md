@@ -1,32 +1,32 @@
-# Casos golden
+# Golden cases
 
-Cada archivo `.json` es un caso: una tarea cuya respuesta se conoce de antemano y
-los checks que el resultado del circuito tiene que cumplir.
+Each `.json` file is a case: a task whose answer is known in advance, and the checks the
+circuit's output has to satisfy.
 
-Viven acá y no en `.ailoop/` porque `.ailoop/` es estado de runtime y está
-gitignoreado: un caso decide un veredicto, así que tiene que poder revisarse en un
-diff. Las corridas sí son estado y van a `.ailoop/golden-runs.jsonl`.
+They live here and not under `.ailoop/` because `.ailoop/` is runtime state and is
+gitignored. A case decides a verdict, so it has to be reviewable in a diff. Runs *are*
+state, and they go to `.ailoop/golden-runs.jsonl`.
 
 ```json
 {
-  "slug": "identificador-unico",
-  "title": "qué protege este caso",
+  "slug": "unique-identifier",
+  "title": "what this case protects",
   "phase": "DISCOVERY | DESIGN | PLAN | IMPLEMENTATION | VERIFICATION",
-  "task": "lo que se le pide al agente",
+  "task": "what the agent is asked to do",
   "checks": [ { "contains": "..." } ],
   "disabled": false
 }
 ```
 
-Un check afirma **exactamente una** de `contains`, `not_contains` o `regex`, y lo
-interpreta el código, nunca un modelo: un juez LLM mete en el instrumento la misma
-varianza que el instrumento existe para detectar (DR-005).
+A check asserts **exactly one** of `contains`, `not_contains` or `regex`, and the code
+interprets it — never a model. An LLM judge puts inside the instrument the very variance
+the instrument exists to detect.
 
-Fallan al CARGAR, no a mitad de la corrida: un caso sin checks, un check que no
-afirma nada, un check con dos afirmaciones, una regex que no compila y dos casos
-con el mismo slug. Una suite vacía **no es verde**.
+These fail at LOAD time, not halfway through a run: a case with no checks, a check that
+asserts nothing, a check with two assertions, a regex that does not compile, and two cases
+sharing a slug. An empty suite **is not green**.
 
-Un caso que el circuito deja de atrapar es un hallazgo sobre el circuito, igual que
-un mutante que sobrevive invalida el test. Se ajusta el prompt o la fase, no el caso.
+A case the circuit stops catching is a finding about the circuit, in the same way a
+surviving mutant invalidates the test. You adjust the prompt or the phase, not the case.
 
-Correr: `ailoop golden "nota opcional"`. Gasta llamadas reales al modelo.
+Run with `ailoop golden "optional note"`. It spends real model calls.

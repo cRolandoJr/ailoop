@@ -1,75 +1,80 @@
 # ailoop
 
-Motor de workflow para desarrollo asistido por LLM. Implementa el protocolo
-**AI Loop**: un trabajo avanza por fases, cada artefacto se aprueba
-explícitamente, y **el cierre lo otorga el proyecto, no el modelo**.
+A workflow engine for LLM-assisted development. It implements the **AI Loop** protocol: a
+work item advances through phases, every artifact is approved explicitly, and **the close
+is granted by the project, not by the model**.
 
-Funciona con cualquier proveedor —Claude, Gemini, cualquier endpoint compatible
-con OpenAI, Ollama local— sin cambiar el flujo.
+It works with any provider — Claude, Gemini, any OpenAI-compatible endpoint, a local
+Ollama — without changing the flow.
 
-## La idea en una línea
+## The idea in one line
 
-> El LLM propone; el workflow valida y autoriza.
+> The LLM proposes; the workflow validates and authorizes.
 
-Un agente que termina su turno no tiene con eso permiso para avanzar. Cada
-transición tiene guardas, y `DONE` se concede sólo después de correr los
-comandos que el propio proyecto declaró.
+An agent that finishes its turn does not thereby have permission to advance. Every
+transition has guards, and `DONE` is granted only after running the commands the project
+itself declared.
 
-## Uso
+## Usage
 
 ```sh
-ailoop start "descripción de la tarea"   # crea el contexto y detecta el stack
-ailoop next [--files a.go,b.go]          # corre el agente de la fase actual
-ailoop next --inline                     # ...pegando esos archivos enteros en el prompt
-ailoop next --critic                     # ...con revisión adversarial
-ailoop status                            # fase actual y estado de aprobación
-ailoop history                           # revisiones archivadas de cada artefacto
-ailoop decide "qué" "por qué"            # registra una decisión aprobada
-ailoop decisions                         # lista el Decision Record
-ailoop verify                            # corre los checks del proyecto
-ailoop capabilities                      # qué puede el modelo, y qué permite cada fase
-ailoop mcp [--schemas]                   # herramientas de los servidores MCP
-ailoop cost                              # gasto de tokens por fase
-ailoop undo                              # vuelve atrás y revierte los parches
+ailoop start "description of the task"   # creates the context and detects the stack
+ailoop next [--files a.go,b.go]          # runs the current phase's agent
+ailoop next --inline                     # ...pasting those files in full into the prompt
+ailoop next --critic                     # ...with adversarial review
+ailoop golden ["note"]                   # runs the golden cases and records the run
+ailoop status                            # current phase and approval state
+ailoop history                           # archived revisions of every artifact
+ailoop decide "what" "why"               # records an approved decision
+ailoop decisions                         # lists the Decision Record
+ailoop verify                            # runs the project's own checks
+ailoop capabilities                      # what the model can do, and what each phase allows
+ailoop mcp [--schemas]                   # tools from the MCP servers
+ailoop cost                              # token spend per phase
+ailoop undo                              # goes back and reverts the patches
 ```
 
-### Configuración del modelo
+### Model configuration
 
-Se elige por variable de entorno, en este orden:
+Chosen by environment variable, in this order:
 
-| Variable | Efecto |
+| Variable | Effect |
 |---|---|
-| `ANTHROPIC_API_KEY` | usa Claude (`ANTHROPIC_MODEL`, por defecto `claude-opus-5`) |
-| `GEMINI_API_KEY` | usa Gemini (`GEMINI_MODEL`, por defecto `gemini-2.5-pro`) |
-| `OPENAI_BASE_URL` | endpoint compatible OpenAI (por defecto `http://localhost:11434/v1`, Ollama) |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | credencial y modelo de ese endpoint |
+| `ANTHROPIC_API_KEY` | use Claude (`ANTHROPIC_MODEL`, default `claude-opus-5`) |
+| `GEMINI_API_KEY` | use Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash`) |
+| `OPENAI_BASE_URL` | OpenAI-compatible endpoint (default `http://localhost:11434/v1`, Ollama) |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | credential and model for that endpoint |
 
-## Las fases
+A project can also route **phases to providers**, so the judgment-heavy phases run on a
+strong model while the mechanical ones stay cheap — and so the verifier runs on
+**different weights** than the implementer, which is what decorrelates their blind spots.
+
+## The phases
 
 ```
 DISCOVERY -> DESIGN -> PLAN -> IMPLEMENTATION -> VERIFICATION -> DONE
 ```
 
-Volver atrás con `undo` no destruye lo escrito: la revisión se archiva y se
-puede recuperar con `ailoop history`.
+Going back with `undo` does not destroy what was written: the revision is archived and can
+be recovered with `ailoop history`.
 
-## Los tres niveles de control
+## The three levels of control
 
-El valor del motor no está en los prompts sino en lo que **no depende** de que
-el modelo se porte bien.
+The engine's value is not in its prompts but in what does **not** depend on the model
+behaving well.
 
-| Nivel | Mecanismo | Dónde vive |
+| Level | Mechanism | Where it lives |
 |---|---|---|
-| **Determinista** | los comandos del proyecto deciden si se cierra | `internal/verify` |
-| **Estructural** | guardas de transición, parseo de parches, validación de rutas, chequeo de citas | `internal/state/guards.go`, `internal/patch`, `internal/agents` |
-| **Semántico** | agente crítico adversarial | `internal/agents/critic.go` |
+| **Deterministic** | the project's own commands decide whether it closes | `internal/verify` |
+| **Structural** | transition guards, patch parsing, path validation, citation checking | `internal/state/guards.go`, `internal/patch`, `internal/agents` |
+| **Semantic** | adversarial critic agent | `internal/agents/critic.go` |
 
-Un agente no puede concederse una excepción a ninguno de los dos primeros.
+An agent cannot grant itself an exception to either of the first two.
 
-## Verificación: qué significa "listo"
+## Verification: what "done" means
 
-`ailoop start` escribe `.ailoop/config.json` con los comandos que definen
-"verificado" para este proyecto:
+`ailoop start` writes `.ailoop/config.json` with the commands that define "verified" for
+this project:
 
 ```json
 {
@@ -81,44 +86,44 @@ Un agente no puede concederse una excepción a ninguno de los dos primeros.
 }
 ```
 
-Si el stack no se reconoce, la lista queda **vacía** y el loop no puede llegar
-a `DONE` hasta que la completes. Una lista vacía nunca se lee como "todo bien":
-que no haya corrido nada no es que haya pasado todo.
+If the stack is not recognized, the list stays **empty** and the loop cannot reach `DONE`
+until you fill it in. An empty list is never read as "everything is fine": nothing having
+run is not everything having passed.
 
-## Herramientas del agente
+## The agent's tools
 
-El agente puede mirar el proyecto real en lugar de imaginarlo:
+The agent can look at the real project instead of imagining it:
 
 ```
 <<TOOL>>
-fs.grep: func Normalizar -- **/*.go
+fs.grep: func Normalize -- **/*.go
 <<END>>
 ```
 
-| Capacidad | Qué hace |
+| Capability | What it does |
 |---|---|
-| `fs.read` | leer un archivo del workspace |
-| `fs.list` | listar un directorio |
-| `fs.glob` | buscar archivos por patrón (`**` cruza directorios) |
-| `fs.grep` | buscar en contenidos por expresión regular, con `-- <glob>` opcional |
-| `fs.read_image` | adjuntar una imagen, **sólo si el modelo ve** |
-| `mcp.describe` / `mcp.call` | herramientas de servidores externos |
-| `cmd.run` | correr un check declarado, **sólo en VERIFICATION** |
+| `fs.read` | read a file from the workspace |
+| `fs.list` | list a directory |
+| `fs.glob` | find files by pattern (`**` crosses directories) |
+| `fs.grep` | search contents by regular expression, with an optional `-- <glob>` |
+| `fs.read_image` | attach an image, **only if the model can see** |
+| `mcp.describe` / `mcp.call` | tools from external servers |
+| `cmd.run` | run a declared check, **only in VERIFICATION** |
 
-El protocolo es texto plano a propósito: el *function calling* nativo varía
-entre proveedores y algunos modelos locales no lo tienen.
+The protocol is plain text on purpose: native function calling varies between providers,
+and some local models do not have it at all.
 
-**Capacidad, permiso y autoridad son tres cosas distintas.** Una capacidad
-necesita dos compuertas: que la fase la permita **y** que el modelo la tenga.
-`ailoop capabilities` muestra las dos.
+**Capability, permission and authority are three different things.** A capability needs two
+gates: the phase must allow it **and** the model must actually have it. `ailoop
+capabilities` shows both.
 
-Sólo el verificador puede correr los checks: un implementador capaz de correr y
-arreglar sus propios tests es su propio verificador.
+Only the verifier may run the checks: an implementer able to run and fix its own tests is
+its own verifier.
 
-## Servidores MCP
+## MCP servers
 
-Cualquier servidor del Model Context Protocol se convierte en capacidades del
-loop, sin reimplementarlo acá:
+Any Model Context Protocol server becomes capabilities of the loop, without reimplementing
+it here:
 
 ```json
 "mcp": [
@@ -126,172 +131,178 @@ loop, sin reimplementarlo acá:
 ]
 ```
 
-Opcionalmente `"tools": ["find_code", "analyze_code_relationships"]` por
-servidor, para exponer sólo lo que usás.
+Optionally `"tools": ["find_code", "analyze_code_relationships"]` per server, to expose
+only what you use.
 
-**Las herramientas se cargan diferidas.** El prompt lleva un catálogo de una
-línea por herramienta; el agente pide `mcp.describe` sólo para la que va a
-usar. Medido contra CodeGraph (25 herramientas): **465 tokens contra 1.660, un
-72% menos en cada request**. `ailoop mcp` muestra la comparación.
+**Tools are loaded lazily.** The prompt carries a one-line catalog per tool; the agent asks
+for `mcp.describe` only for the one it is about to use. Measured against CodeGraph (25
+tools): **465 tokens against 1,660 — 72% less on every request**. `ailoop mcp` shows the
+comparison.
 
-Un servidor que no arranca se reporta y sus herramientas **no se ofrecen**:
-planificar alrededor de una herramienta muerta es peor que no tenerla.
+A server that fails to start is reported and its tools are **not offered**: planning around
+a dead tool is worse than not having it.
 
-## Gasto de tokens
+## Token spend
 
-`ailoop cost` da el desglose por fase, con tasa de acierto de caché. Los tres
-adaptadores leen el uso real que reporta su API; cuando un servidor local no
-reporta nada, se estima y **se marca como estimado** — y esa marca es pegajosa:
-un total que mezcla medido con estimado es un estimado.
+`ailoop cost` gives the breakdown per phase, with cache hit rate. All three adapters read
+the real usage their API reports; when a local server reports nothing, it is estimated and
+**marked as estimated** — and that mark is sticky: a total that mixes measured with
+estimated is an estimate.
 
-Cuatro medidas, todas agnósticas del proveedor salvo donde se indica:
+Four measures, all provider-agnostic except where noted:
 
-| Medida | Efecto |
+| Measure | Effect |
 |---|---|
-| **Prefijo estable** | el system prompt no lleva nada volátil. Claude necesita el marcador explícito, los endpoints OpenAI lo hacen solos; la forma correcta del prompt es la misma |
-| **Catálogo MCP diferido** | −72% del costo de las definiciones de herramientas |
-| **`--files` por referencia** | nombra los archivos; el agente lee los que necesita. `--inline` conserva el volcado |
-| **Observation masking** | elide observaciones viejas del tool loop. Medido: **−52% a 6 rondas, −68% a 10** |
+| **Stable prefix** | the system prompt carries nothing volatile. Claude needs the explicit marker, OpenAI endpoints do it on their own; the correct shape of the prompt is the same either way |
+| **Lazy MCP catalog** | −72% of the cost of tool definitions |
+| **`--files` by reference** | names the files; the agent reads the ones it needs. `--inline` keeps the full dump |
+| **Observation masking** | elides old observations from the tool loop. Measured: **−52% at 6 rounds, −68% at 10** |
 
-El masking **no se activa** por debajo de 12k tokens: reescribir mensajes
-viejos invalida el prefijo cacheado, y eso costaría más de lo que ahorra en una
-conversación chica. Nunca elide una observación que contiene un error —
-esconderlo rompe el ciclo que lo está diagnosticando.
+Masking **does not engage** below 12k tokens: rewriting old messages invalidates the cached
+prefix, and that would cost more than it saves in a short conversation. It never elides an
+observation containing an error — hiding it breaks the very cycle that is diagnosing it.
 
-## Investigación en internet
+## Research on the internet
 
-Un agente que escribe código y además navega puede poner tu código en una URL. Por eso
-**no es el mismo agente**:
+An agent that writes code and also browses can put your code into a URL. So it is **not the
+same agent**:
 
-| | Agente principal | Agente investigador |
+| | Main agent | Research agent |
 |---|---|---|
-| Workspace, código, decisiones | ✅ | ❌ |
+| Workspace, code, decisions | ✅ | ❌ |
 | `fs.read`, `fs.grep`, `fs.glob` | ✅ | ❌ |
-| **Red** | ❌ **en toda fase** | ✅ |
-| Recibe | la tarea completa | **sólo una pregunta, máximo 500 caracteres** |
+| **Network** | ❌ **in every phase** | ✅ |
+| Receives | the full task | **only a question, 500 characters maximum** |
 
-El principal delega con `research.ask`; nunca toca la red él mismo. El investigador no puede
-filtrar lo que nunca tuvo — es una propiedad estructural, no una apuesta sobre el
-comportamiento del modelo.
+The main agent delegates with `research.ask`; it never touches the network itself. The
+researcher cannot leak what it never had — a structural property, not a bet on the model's
+behavior.
 
-**Busca donde sea.** No hay allowlist de destinos: restringirlos no defiende del canal real
-—lo que sale es la pregunta— y volvería inútil la investigación, porque no se sabe de
-antemano dónde está la respuesta.
+**It searches anywhere.** There is no destination allowlist: restricting destinations does
+not defend the real channel — what leaves is the question — and it would make research
+useless, because you do not know in advance where the answer is.
 
-**Salvo la red local**, que se bloquea siempre y no es configurable: `localhost`, IPs
-privadas, link-local y `.internal`. El investigador no tiene nada del proyecto, pero corre
-dentro de tu perímetro; alcanzar tu router o el endpoint de metadata de un cloud no es
-exfiltración, es SSRF. Los redirects se vuelven a chequear, por la misma razón.
+**Except the local network**, which is always blocked and is not configurable:
+`localhost`, private IPs, link-local and `.internal`. The researcher holds nothing from the
+project, but it runs inside your perimeter; reaching your router or a cloud metadata
+endpoint is not exfiltration, it is SSRF. Redirects are re-checked, for the same reason.
 
-Todo lo que trae llega envuelto en `UNTRUSTED_CONTENT` con la regla al lado del contenido:
-es dato de terceros, nunca instrucciones. La inyección de prompt es el caso esperado.
+Everything it brings back arrives wrapped in `UNTRUSTED_CONTENT` with the rule stated next
+to the content: it is third-party data, never instructions. Prompt injection is the
+expected case.
 
 ```json
 "web": {"enabled": true}
 ```
 
-`enabled` es explícito y `ailoop start` lo escribe en el config para que lo veas y puedas
-apagarlo. Opcionalmente `"allowed"` restringe destinos y `"blocked"` los excluye.
+`enabled` is explicit, and `ailoop start` writes it into the config so you can see it and
+turn it off. Optionally `"allowed"` restricts destinations and `"blocked"` excludes them.
 
-**Lo que queda abierto:** la pregunta la formula el agente principal, que sí ve el código.
-Ese canal no se cierra sin volver inútil la función; se mantiene **angosto** (500
-caracteres), **visible** (se muestra como cualquier otra herramienta) y **registrado**.
+**What stays open:** the question is written by the main agent, which does see the code.
+That channel cannot be closed without making the feature useless; it is kept **narrow**
+(500 characters), **visible** (shown like any other tool) and **logged**.
 
-## Referencias en el texto
+## References in text
 
-Cualquier cosa que escribas —la tarea, el motivo de un rechazo— acepta referencias:
+Anything you write — the task, the reason for a rejection — accepts references:
 
 ```
-ailoop start "arreglá el alineado, mirá @captura.png y @src/boton.tsx"
+ailoop start "fix the alignment, look at @screenshot.png and @src/button.tsx"
 ```
 
-| Referencia | Qué adjunta | Necesita |
+| Reference | What it attaches | Requires |
 |---|---|---|
-| `@main.go` | el contenido del archivo | — |
-| `@~/Descargas/spec.pdf` | el texto del PDF | `pdftotext` |
-| `@captura.png` | la imagen | un modelo con visión |
-| `@screen` / `@screen:select` | la pantalla, o una región | `grim` / `slurp` |
-| `@clipboard` | lo que tengas copiado, texto o imagen | `wl-paste` |
+| `@main.go` | the file's contents | — |
+| `@~/Downloads/spec.pdf` | the PDF's text | `pdftotext` |
+| `@screenshot.png` | the image | a model with vision |
+| `@screen` / `@screen:select` | the screen, or a region | `grim` / `slurp` |
+| `@clipboard` | whatever you copied, text or image | `wl-paste` |
 
-`ailoop doctor` te dice cuáles de esas herramientas tenés y qué perdés por las que falten.
+`ailoop doctor` tells you which of those tools you have and what you lose for the ones you
+are missing.
 
-### Dos reglas que hacen que esto sea seguro
+### Two rules that make this safe
 
-**Las referencias son tuyas, no del agente.** Por eso pueden salir del workspace:
-escribir `@~/Descargas/spec.pdf` **es** la autorización, dada caso por caso. El
-agente, con `fs.read` y `fs.grep`, sigue confinado al workspace — ahí nadie
-autorizó nada.
+**References are yours, not the agent's.** That is why they may leave the workspace:
+writing `@~/Downloads/spec.pdf` **is** the authorization, given case by case. The agent,
+with `fs.read` and `fs.grep`, stays confined to the workspace — nobody authorized anything
+there.
 
-**`@screen` nunca es una capacidad del agente.** Sólo ocurre porque vos lo
-escribiste. Un agente que pudiera capturar la pantalla cuando quisiera vería tu
-gestor de contraseñas, tu correo, lo que tengas abierto.
+**`@screen` is never a capability of the agent.** It happens only because you typed it. An
+agent that could capture the screen whenever it wanted would see your password manager,
+your mail, whatever you have open.
 
-### Lo volátil se congela
+### What is volatile gets frozen
 
-Si rechazás una propuesta con *"esto está mal, mirá @screen"*, la captura se hace
-**en ese momento** y se guarda junto al estado del trabajo. El agente lee ese motivo
-en la corrida siguiente, cuando la pantalla ya muestra otra cosa; sin congelarla,
-fotografiaría cualquier cosa.
+If you reject a proposal with *"this is wrong, look at @screen"*, the capture is taken **at
+that moment** and stored alongside the work item's state. The agent reads that reason on
+the next run, when the screen already shows something else; without freezing it, it would
+photograph whatever happened to be there.
 
-## Portabilidad
+## Portability
 
-El núcleo es Go y no depende de nada: la máquina de estados, las guardas, el ledger,
-el presupuesto y el parcheo se comportan igual en todas partes. Lo que varía es el
-entorno, y esas capacidades se **descubren**, no se asumen.
+The core is Go and depends on nothing: the state machine, the guards, the ledger, the
+budget and the patching behave the same everywhere. What varies is the environment, and
+those capabilities are **discovered**, not assumed.
 
 ```sh
-nix develop    # desarrollar: las herramientas en el PATH
-nix build      # el binario, con sus dependencias colgadas
+nix develop    # develop: the tools on the PATH
+nix build      # the binary, with its dependencies attached
 nix run github:cRolandoJr/ailoop
 ```
 
-La diferencia importa: un devShell resuelve el PATH de quien lo abre; el paquete usa
-`wrapProgram`, así que el binario lleva `poppler-utils`, `grim`, `slurp` y
-`wl-clipboard` sin que estén instalados en la máquina.
+The difference matters: a devShell resolves the PATH of whoever opens it; the package uses
+`wrapProgram`, so the binary carries `poppler-utils`, `grim`, `slurp` and `wl-clipboard`
+without them being installed on the machine.
 
-Sin Nix también funciona: las capacidades cuya herramienta falte simplemente no se
-ofrecen, y `ailoop doctor` dice cuáles son.
+It also works without Nix: capabilities whose tool is missing are simply not offered, and
+`ailoop doctor` says which ones.
 
-## Seguridad de los parches
+## Patch safety
 
-- Las rutas se validan contra el workspace: se rechazan absolutas y las que
-  escapan con `..`.
-- Si **algún** bloque del parche es inválido, no se aplica **ninguno**.
-- Un bloque de búsqueda ambiguo (varias coincidencias) se rechaza en lugar de
-  parchear "la primera".
-- Cada archivo se respalda preservando su ruta antes de tocarlo, y `undo`
-  restaura de verdad, informando qué restauró y qué no pudo.
-- `cmd.run` ejecuta **únicamente** los comandos declarados en el config: no hay
-  shell arbitrario en ningún camino.
+- Paths are validated against the workspace: absolute ones, and ones escaping with `..`,
+  are rejected.
+- If **any** block of the patch is invalid, **none** of it is applied.
+- An ambiguous search block (several matches) is rejected instead of patching "the first
+  one".
+- Every file is backed up preserving its path before being touched, and `undo` really
+  restores, reporting what it restored and what it could not.
+- `cmd.run` executes **only** the commands declared in the config: there is no arbitrary
+  shell on any path.
 
-## Arquitectura
+## Architecture
 
 ```
-main.go                 CLI y orquestación
-internal/state          fases, guardas, historial, Decision Record, ledger de gasto
-internal/verify         ejecuta los comandos del proyecto
-internal/config         qué significa "verificado" acá, y qué servidores MCP hay
-internal/agents         agentes por fase, crítico, permisos, tool loop, masking, citas
-internal/tools          capacidades y su ejecución acotada
-internal/mcp            cliente del Model Context Protocol
-internal/patch          parches con respaldo y rollback
-internal/llm            puerto de LLM + adaptadores (Claude, Gemini, OpenAI)
-internal/ui             aprobación humana
+main.go                 CLI and orchestration
+internal/state          phases, guards, history, Decision Record, spend ledger, turn journal
+internal/verify         runs the project's commands
+internal/config         what "verified" means here, and which MCP servers exist
+internal/golden         golden cases: declarative checks over what the circuit produces
+internal/agents         per-phase agents, critic, permissions, tool loop, masking, citations
+internal/tools          capabilities and their bounded execution
+internal/mcp            Model Context Protocol client
+internal/patch          patches with backup and rollback
+internal/llm            LLM port + adapters (Claude, Gemini, OpenAI)
+internal/ui             human approval
 ```
 
-`internal/llm.Client` es un puerto de dos métodos: agregar un proveedor nuevo
-no toca nada del resto.
+`internal/llm.Client` is a two-method port: adding a new provider touches nothing else.
 
-## Estado
+## The same protocol on Claude Code
 
-MVP funcional, con tests. Pendiente:
+The protocol also ships as a Claude Code plugin, where Claude Code itself is the host and
+the skill carries only the protocol:
+[`cRolandoJr/ai-loop-skill`](https://github.com/cRolandoJr/ai-loop-skill).
 
-- el adaptador de Claude está probado en su lógica pero todavía no llamó a la
-  API real;
-- el adaptador OpenAI-compatible no envía imágenes (por eso declara
-  `Vision: unknown`, que es fail-closed y nunca se le ofrecen);
-- Gemini tiene *context caching* explícito que este adaptador no usa.
+## Status
 
-## Licencia
+A working MVP, with tests. Outstanding:
 
-MIT — ver [LICENSE](LICENSE).
+- the Claude adapter is tested in its logic but has not yet called the real API;
+- the OpenAI-compatible adapter does not send images (which is why it declares
+  `Vision: unknown` — fail-closed, so they are never offered to it);
+- Gemini has explicit context caching that this adapter does not use.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

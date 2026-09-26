@@ -1,0 +1,10 @@
+{
+  "slug": "cites-the-ground",
+  "title": "The agent reads the repo before answering, and cites where it saw it",
+  "phase": "DISCOVERY",
+  "task": "How many tool rounds may an agent take before it is obliged to answer? Name the symbol and the file where it is defined.",
+  "checks": [
+    { "contains": "MaxToolRounds" },
+    { "regex": "runner\\.go" }
+  ]
+}
