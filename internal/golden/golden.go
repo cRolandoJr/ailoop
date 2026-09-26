@@ -99,7 +99,15 @@ type Case struct {
 	Title  string  `json:"title"`
 	Phase  string  `json:"phase"`
 	Task   string  `json:"task"`
-	Checks []Check `json:"checks"`
+	// Proposal routes the case to the adversarial critic instead of the phase
+	// agent: the critic is handed this text as the artifact to attack. It is
+	// what lets a case assert that the GATE knocks something down, which no
+	// phase agent can be asked to do — the gate is not a phase.
+	//
+	// Phase stays required even here: it selects which model critiques, which
+	// is the same rule the loop already follows.
+	Proposal string  `json:"proposal,omitempty"`
+	Checks   []Check `json:"checks"`
 	// Disabled parks a case without deleting it, so the reason it was parked
 	// stays in the diff.
 	Disabled bool `json:"disabled,omitempty"`

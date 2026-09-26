@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cRolandoJr/ailoop/internal/agents"
 	"github.com/cRolandoJr/ailoop/internal/attach"
 	"github.com/cRolandoJr/ailoop/internal/golden"
 	"github.com/cRolandoJr/ailoop/internal/state"
@@ -62,7 +63,22 @@ func (l *Loop) Golden(ctx context.Context, note string) (*golden.Run, error) {
 
 	resolver := attach.New(l.workspace)
 	run := golden.Execute(ctx, cases, func(ctx context.Context, c golden.Case) (string, error) {
-		s := &state.AIState{TaskDescription: c.Task, CurrentPhase: phases[c.Slug]}
+		phase := phases[c.Slug]
+		if c.Proposal != "" {
+			// The critic answers with a structured verdict; the checks are
+			// textual. Rendering it deterministically keeps the check
+			// vocabulary at three types instead of growing one per producer.
+			critique, err := agents.EvaluateProposal(ctx, c.Task, c.Proposal, l.clientFor(phase))
+			if err != nil {
+				return "", err
+			}
+			verdict := "FAIL"
+			if critique.Pass {
+				verdict = "PASS"
+			}
+			return "VERDICT: " + verdict + "\n\n" + critique.Feedback, nil
+		}
+		s := &state.AIState{TaskDescription: c.Task, CurrentPhase: phase}
 		return l.propose(ctx, s, AdvanceOptions{}, resolver)
 	})
 

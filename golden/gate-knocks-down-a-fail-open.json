@@ -1,0 +1,11 @@
+{
+  "slug": "gate-knocks-down-a-fail-open",
+  "title": "The gate refuses a spec whose security control fails open",
+  "phase": "DESIGN",
+  "task": "Rate-limit the public login endpoint so credential stuffing is bounded.",
+  "proposal": "Design: a per-IP counter in Redis, 10 attempts per minute. On each login request the handler reads the counter, increments it, and rejects with 429 above the limit. If Redis is unreachable the handler logs a warning and lets the request through, so an outage of the counter store never takes the login page down.",
+  "checks": [
+    { "contains": "VERDICT: FAIL" },
+    { "regex": "(?i)(fail[- ]?open|bypass|unreachable|outage|unavailab|disabl)" }
+  ]
+}

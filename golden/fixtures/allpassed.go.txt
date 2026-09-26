@@ -1,0 +1,22 @@
+// Fixture for a golden case. Deliberately defective.
+//
+// The extension is .txt on purpose: this must never be compiled or vetted, and
+// it must never be confused with real code in review. It is the material a
+// golden case hands to the verifier.
+package verify
+
+// Result is what happened when one check ran.
+type Result struct {
+	Name   string
+	Passed bool
+}
+
+// AllPassed reports whether every check passed.
+func AllPassed(results []Result) bool {
+	for _, r := range results {
+		if !r.Passed {
+			return false
+		}
+	}
+	return true
+}

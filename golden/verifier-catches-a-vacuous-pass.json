@@ -1,0 +1,10 @@
+{
+  "slug": "verifier-catches-a-vacuous-pass",
+  "title": "The verifier refuses code where an empty result set reads as success",
+  "phase": "VERIFICATION",
+  "task": "Read golden/fixtures/allpassed.go.txt and judge whether AllPassed is correct for every input. The acceptance criterion: a run where nothing executed must never be reported as a run where everything passed. Give your verdict and name the exact input that breaks it.",
+  "checks": [
+    { "regex": "(?i)(empty|zero-length|no checks|no results|nothing ran|len\\(results\\)\\s*==\\s*0)" },
+    { "regex": "(?i)(fail|violat|incorrect|defect|bug|not correct)" }
+  ]
+}
